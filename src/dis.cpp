@@ -39,14 +39,6 @@ using tcp = net::ip::tcp;
 */
 namespace discpp
 {
-    /*
-    namespace detail
-    {
-        thread_pool::thread_pool()
-        {
-        }
-    }*/
-
 
     connection::connection()
     {
@@ -190,6 +182,7 @@ namespace discpp
             // this makes sense, right? a read should happen before every write...
             // but now this allows one input to block further functionality! we need
             // to fix this! look into stranding.
+            BOOST_LOG_TRIVIAL(debug) << "Executing read handler";
             on_read();
             while (!write_queue.empty())
             {
@@ -215,12 +208,23 @@ namespace discpp
         int op = *j.find("op");
         // run the appropriate function asynchronously
         // TODO: handle exceptions that could arise
-        std::async(std::launch::async, switchboard[op], j);
+        // std::async(std::launch::async, switchboard[op], j);
+        try
+        {
+        std::thread th(switchboard[op], j);
+        th.detach();
+        } // replace this with actual error handling later
+        catch (std::exception e)
+        {
+            BOOST_LOG_TRIVIAL(error) << e.what();
+        }
     }
 
+    /*
     void connection::on_write(beast::error_code ec, std::size_t bytes_transferred)
     {
     }
+    */
 
     void connection::gw_dispatch(nlohmann::json j)
     {
@@ -265,7 +269,16 @@ namespace discpp
         heartbeat_interval = *subj.find("heartbeat_interval");
         BOOST_LOG_TRIVIAL(debug) << "Heartbeat interval is " << heartbeat_interval;
         // now we gotta queue up heartbeats!
-        std::async(std::launch::async, &connection::heartbeat_loop, this);
+        // std::async(std::launch::async, &connection::heartbeat_loop, this);
+        try
+        {
+            std::thread th(&connection::heartbeat_loop, this);
+            th.detach();
+        } // replace this just like the other try catch
+        catch (std::exception e)
+        {
+            BOOST_LOG_TRIVIAL(debug) << e.what();
+        }
 
         BOOST_LOG_TRIVIAL(debug) << "Sending an Identify...";
         std::ifstream token_stream("token");

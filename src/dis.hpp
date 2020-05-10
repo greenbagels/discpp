@@ -43,7 +43,7 @@ namespace discpp
             bool compression = false);
             void main_loop();
             void on_read(/*beast::error_code ec, std::size_t bytes_written*/);
-            void on_write(beast::error_code ec, std::size_t bytes_transferred);
+            // void on_write(beast::error_code ec, std::size_t bytes_transferred);
             void gw_dispatch(nlohmann::json);
             void gw_heartbeat(nlohmann::json);
             void gw_identify(nlohmann::json);
