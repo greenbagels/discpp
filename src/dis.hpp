@@ -2,6 +2,9 @@
 #define DIS_HPP
 
 #include <array>
+#include <future>
+#include <functional>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -29,20 +32,6 @@ namespace discpp
     namespace net = boost::asio;
     namespace ssl = net::ssl;
     using tcp = net::ip::tcp;
-    /*
-    namespace detail
-    {
-        class thread_pool
-        {
-            public:
-                thread_pool();
-            private:
-                std::vector<std::thread> threads;
-                std::queue<std::string> results;
-                std::mutex result_lock;
-        };
-    }
-    */
 
     class connection : public std::enable_shared_from_this<connection>
     {
@@ -66,16 +55,33 @@ namespace discpp
             void gw_invalid(nlohmann::json);
             void gw_hello(nlohmann::json);
             void gw_heartbeat_ack(nlohmann::json);
+            void heartbeat_loop();
         private:
+            bool heartbeat_ack;
             std::string gateway_url;
             std::size_t heartbeat_interval;
             std::shared_ptr<ssl::context> sslc;
             std::shared_ptr<net::io_context> ioc;
             std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
-            std::vector<std::thread> thread_pool;
-            std::vector<std::string> write_queue;
-            std::size_t active_thread_count;
+            std::queue<std::string> write_queue;
+            std::mutex heartex;
+            std::mutex writex;
             beast::flat_buffer read_buffer;
+            std::array<std::function<void(nlohmann::json)>, 12> switchboard =
+            {
+                [this](nlohmann::json j) { this -> gw_dispatch(j);      },
+                [this](nlohmann::json j) { this -> gw_heartbeat(j);     },
+                [this](nlohmann::json j) { this -> gw_identify(j);      },
+                [this](nlohmann::json j) { this -> gw_presence(j);      },
+                [this](nlohmann::json j) { this -> gw_voice_state(j);   },
+                [    ](nlohmann::json j) {                              },
+                [this](nlohmann::json j) { this -> gw_resume(j);        },
+                [this](nlohmann::json j) { this -> gw_reconnect(j);     },
+                [this](nlohmann::json j) { this -> gw_req_guild(j);     },
+                [this](nlohmann::json j) { this -> gw_invalid(j);       },
+                [this](nlohmann::json j) { this -> gw_hello(j);         },
+                [this](nlohmann::json j) { this -> gw_heartbeat_ack(j); }
+            };
     };
 
 }

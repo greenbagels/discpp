@@ -25,6 +25,9 @@
 #include <iostream>
 // obvi
 #include <vector>
+#include <stdexcept>
+#include <mutex>
+#include <fstream>
 
 /*
 namespace beast = boost::beast;
@@ -58,7 +61,7 @@ namespace discpp
             // TODO: add parameter dictating sink
             boost::log::trivial::severity >= boost::log::trivial::debug
         );
-        active_thread_count = 0;
+        heartbeat_ack = true;
     }
 
     void connection::get_gateway(std::string rest_url)
@@ -188,15 +191,17 @@ namespace discpp
             // but now this allows one input to block further functionality! we need
             // to fix this! look into stranding.
             on_read();
-            if (!write_queue.empty())
+            while (!write_queue.empty())
             {
                 BOOST_LOG_TRIVIAL(debug) << "Queueing synchronous write";
                 /*
                 stream->async_write(net::buffer(response_str),
                     beast::bind_front_handler(&connection::on_write, shared_from_this()));
                     */
-                stream->write(net::buffer(write_queue.back()));
-                write_queue.pop_back();
+                stream->write(net::buffer(write_queue.front()));
+                writex.lock();
+                write_queue.pop();
+                writex.unlock();
             }
         }
     }
@@ -205,55 +210,12 @@ namespace discpp
     void connection::on_read()
     {
         BOOST_LOG_TRIVIAL(debug) << "Async read handler executed...";
-        //if (!ec)
-        {
-            nlohmann::json j =
-                nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
-            int opcode = *j.find("op");
-            switch (opcode)
-            {
-                case 0:
-                    thread_pool.push_back(std::thread(&connection::gw_dispatch, this, j));
-                    break;
-                case 1:
-                    thread_pool.push_back(std::thread(&connection::gw_heartbeat, this, j));
-                    break;
-                case 2:
-                    thread_pool.push_back(std::thread(&connection::gw_identify, this, j));
-                    break;
-                case 3:
-                    thread_pool.push_back(std::thread(&connection::gw_presence, this, j));
-                    break;
-                case 4:
-                    thread_pool.push_back(std::thread(&connection::gw_voice_state, this, j));
-                    break;
-                case 6:
-                    thread_pool.push_back(std::thread(&connection::gw_resume, this, j));
-                    break;
-                case 7:
-                    thread_pool.push_back(std::thread(&connection::gw_reconnect, this, j));
-                    break;
-                case 8:
-                    thread_pool.push_back(std::thread(&connection::gw_req_guild, this, j));
-                    break;
-                case 9:
-                    thread_pool.push_back(std::thread(&connection::gw_invalid, this, j));
-                    break;
-                case 10:
-                    BOOST_LOG_TRIVIAL(debug) << "Opcode Hello received!";
-                    thread_pool.push_back(std::thread(&connection::gw_hello, this, j));
-                    break;
-                case 11:
-                    thread_pool.push_back(std::thread(&connection::gw_heartbeat_ack, this, j));
-                    break;
-                default:
-                    break;
-            }
-        }
-        /*else
-        {
-            BOOST_LOG_TRIVIAL(error) << "Unknown read error!";
-        }*/
+        nlohmann::json j =
+            nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
+        int op = *j.find("op");
+        // run the appropriate function asynchronously
+        // TODO: handle exceptions that could arise
+        std::async(std::launch::async, switchboard[op], j);
     }
 
     void connection::on_write(beast::error_code ec, std::size_t bytes_transferred)
@@ -303,9 +265,62 @@ namespace discpp
         heartbeat_interval = *subj.find("heartbeat_interval");
         BOOST_LOG_TRIVIAL(debug) << "Heartbeat interval is " << heartbeat_interval;
         // now we gotta queue up heartbeats!
+        std::async(std::launch::async, &connection::heartbeat_loop, this);
+
+        BOOST_LOG_TRIVIAL(debug) << "Sending an Identify...";
+        std::ifstream token_stream("token");
+        std::stringstream ss;
+        ss << token_stream.rdbuf();
+        nlohmann::json response =
+        {
+            {"op", 2},
+            {"d", {{"token", ss.str().c_str()},
+                   {"properties", {{"$os", "linux"},
+                                   {"$browser", "discpp 0.01"},
+                                   {"$device", "discpp 0.01"}
+                                  }}
+            }}
+        };
+        writex.lock();
+        write_queue.push(response.dump());
+        writex.unlock();
     }
 
     void connection::gw_heartbeat_ack(nlohmann::json j)
     {
+        BOOST_LOG_TRIVIAL(debug) << "Heartbeat ACK received!";
+        heartex.lock();
+        // TODO: check if already 1, because then a mistake happened!
+        heartbeat_ack = 1;
+        heartex.unlock();
+    }
+
+    void connection::heartbeat_loop()
+    {
+        BOOST_LOG_TRIVIAL(debug) << "Heartbeat loop started";
+        while(true)
+        {
+            heartex.lock();
+            if (!heartbeat_ack)
+            {
+                BOOST_LOG_TRIVIAL(error) << "Haven't received a heartbeat ACK!";
+                throw std::runtime_error("Possible zombie connection... terminating!");
+            }
+            heartbeat_ack = 0;
+            heartex.unlock();
+
+            nlohmann::json response;
+            response["op"] = 1;
+            // TODO: allow resuming by sequence number
+            response["d"] = "null";
+            // TODO: MANIPULATING MUTEXES BY HAND IS ASKING FOR TROUBLE; HANDLE
+            // THIS WITH A LOCK_GUARD, IF POSSIBLE (or handle exceptions here!)
+            BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
+            writex.lock();
+            write_queue.push(response.dump());
+            writex.unlock();
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_interval));
+        }
     }
 }
