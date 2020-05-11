@@ -35,6 +35,9 @@ namespace discpp
 
     class connection : public std::enable_shared_from_this<connection>
     {
+        // TODO: consider whether these functions actually need to be visible
+        // to the library end-user, or whether we can hide them in a detail
+        // implementation.
         public:
             connection();
             void init_logger();
@@ -43,7 +46,6 @@ namespace discpp
             bool compression = false);
             void main_loop();
             void on_read(/*beast::error_code ec, std::size_t bytes_written*/);
-            // void on_write(beast::error_code ec, std::size_t bytes_transferred);
             void gw_dispatch(nlohmann::json);
             void gw_heartbeat(nlohmann::json);
             void gw_identify(nlohmann::json);
@@ -56,16 +58,20 @@ namespace discpp
             void gw_hello(nlohmann::json);
             void gw_heartbeat_ack(nlohmann::json);
             void heartbeat_loop();
+            void event_ready(nlohmann::json);
+
         private:
             bool heartbeat_ack;
+            bool heartbit;
+            int seq_num;
             std::string gateway_url;
             std::size_t heartbeat_interval;
             std::shared_ptr<ssl::context> sslc;
             std::shared_ptr<net::io_context> ioc;
             std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
             std::queue<std::string> write_queue;
-            std::mutex heartex;
-            std::mutex writex;
+            std::mutex heartex, writex, sequex, idex;
+            std::condition_variable cv;
             beast::flat_buffer read_buffer;
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
             {

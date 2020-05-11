@@ -1,18 +1,20 @@
+// Class declarations
 #include "dis.hpp"
-// for logging
+
+// boost::log
 #define BOOST_LOG_DYN_LINK 1
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
-// for json
+// nlohmann::json
 #include "json.hpp"
-// for networking
+// Required by boost::beast for async io
 #include <boost/asio.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/ip/tcp.hpp>
-// for websockets
-// NOTE: needs boost 1.68 for beast ssl
+// For html/websockets
+// NOTE: needs boost >=1.68 for beast+ssl
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
@@ -21,28 +23,27 @@
 #include <boost/beast/version.hpp>
 // multithreading
 #include <thread>
+#include <mutex>
 // for regular io
 #include <iostream>
-// obvi
+#include <fstream>
+// self explanatory
 #include <vector>
 #include <stdexcept>
-#include <mutex>
-#include <fstream>
+// For tolower
+#include <cctype>
 
-/*
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace websocket = beast::websocket;
-namespace net = boost::asio;
-namespace ssl = net::ssl;
-using tcp = net::ip::tcp;
-*/
 namespace discpp
 {
 
     connection::connection()
     {
+        // Set up boost's trivial logger  
         init_logger();
+
+        // receiving an ACK is a precondition for all our heartbeats...
+        // except the first!
+        heartbeat_ack = true;
     }
 
     void connection::init_logger()
@@ -53,13 +54,13 @@ namespace discpp
             // TODO: add parameter dictating sink
             boost::log::trivial::severity >= boost::log::trivial::debug
         );
-        heartbeat_ack = true;
     }
 
     void connection::get_gateway(std::string rest_url)
     {
         // This is the only time that we need to use the HTTP interface directly
 
+        // Safety is key --- let's make sure SSL certs are checked and valid
         sslc = std::make_shared<ssl::context>(ssl::context::tlsv13_client);
         sslc->set_default_verify_paths();
         sslc->set_verify_mode(ssl::verify_peer);
@@ -68,6 +69,7 @@ namespace discpp
         tcp::resolver resolver{*ioc};
         beast::ssl_stream<beast::tcp_stream> ssl_stream(*ioc, *sslc);
 
+        // Configure TLS SNI for picky hosts
         if (! SSL_set_tlsext_host_name(ssl_stream.native_handle(), rest_url.c_str()))
         {
             beast::error_code err{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
@@ -90,6 +92,7 @@ namespace discpp
         request.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
         BOOST_LOG_TRIVIAL(debug) << "Sending request:\n" << request;
 
+        // Get the gateway URL
         http::write(ssl_stream, request);
 
         beast::flat_buffer buf;
@@ -109,7 +112,7 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Shutting down now.";
         ssl_stream.shutdown(err);
         // discord doesn't behave according to HTTP spec, so we have to handle
-        // truncated stream errors...:
+        // truncated stream errors as if they AREN'T actually errors...
         if (err == net::error::eof || err == ssl::error::stream_truncated)
         {
             // make sure the SSL protocol is followed correctly
@@ -123,10 +126,11 @@ namespace discpp
 
     void connection::gateway_connect(int version, std::string encoding, bool compression)
     {
+        // I said earlier that we only do the HTTP stuff once...
         // except we kind of reuse the same general concepts for websocket (being an
         // upgraded http connection, after all)
 
-        // std::unique_ptr<ssl::context> sslc(new ssl::context(ssl::tlsv13_client));
+        // Again, secure our websocket connection
         sslc = std::make_shared<ssl::context>(ssl::context::tlsv13_client);
         sslc->set_default_verify_paths();
         sslc->set_verify_mode(ssl::verify_peer);
@@ -142,25 +146,14 @@ namespace discpp
 
         std::string url = gateway_url + ':' + std::to_string(cxn.port());
         std::string ext = "/?v=" + std::to_string(version) + "&encoding=" + encoding;
+        if (compression == true)
+        {
+            ext += "&compress=zlib-stream";
+        }
         BOOST_LOG_TRIVIAL(debug) << "Performing ssl handshake...";
         stream->next_layer().handshake(ssl::stream_base::client);
         BOOST_LOG_TRIVIAL(debug) << "Upgrading to websocket connection at " << url + ext;
         stream->handshake(url, ext);
-
-        /*
-        beast::flat_buffer buffer;
-        stream->read(buffer);
-        BOOST_LOG_TRIVIAL(debug) << beast::make_printable(buffer.data()) << std::endl;
-        // TODO: proper error handling
-        try
-        {
-            BOOST_LOG_TRIVIAL(debug) << "Closing websocket...";
-            stream->close(websocket::close_code::normal);
-        } catch (std::exception const &e)
-        {
-            BOOST_LOG_TRIVIAL(error) << e.what() << std::endl;
-        }
-        */
     }
 
     void connection::main_loop()
@@ -171,26 +164,16 @@ namespace discpp
         while (keep_going)
         {
             // so first, let's queue a read up for run()
-            BOOST_LOG_TRIVIAL(debug) << "Queuing synchronous read";
-            /*stream->async_read(read_buffer,
-                beast::bind_front_handler(&connection::on_read, shared_from_this()));*/
+            BOOST_LOG_TRIVIAL(debug) << "Starting synchronous read";
             stream->read(read_buffer);
-            // BOOST_LOG_TRIVIAL(debug) << "Running the io context event loop";
-            // ioc->run();
-            // Now, we queue up a *concurrent write* with the next read. run will
-            // block until they *both* finish.
-            // this makes sense, right? a read should happen before every write...
-            // but now this allows one input to block further functionality! we need
-            // to fix this! look into stranding.
             BOOST_LOG_TRIVIAL(debug) << "Executing read handler";
             on_read();
             while (!write_queue.empty())
             {
-                BOOST_LOG_TRIVIAL(debug) << "Queueing synchronous write";
-                /*
-                stream->async_write(net::buffer(response_str),
-                    beast::bind_front_handler(&connection::on_write, shared_from_this()));
-                    */
+                // Just a note: if the gateway is waiting on us to send data,
+                // and the write queue is empty (because all the event handlers
+                // are still busy), then we will deadlock on the next read!
+                BOOST_LOG_TRIVIAL(debug) << "Starting synchronous write";
                 stream->write(net::buffer(write_queue.front()));
                 writex.lock();
                 write_queue.pop();
@@ -199,20 +182,19 @@ namespace discpp
         }
     }
 
-    // TODO: change name
+    // TODO: change name (maybe)
     void connection::on_read()
     {
-        BOOST_LOG_TRIVIAL(debug) << "Async read handler executed...";
+        BOOST_LOG_TRIVIAL(debug) << "Read handler executed...";
         nlohmann::json j =
             nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
         int op = *j.find("op");
-        // run the appropriate function asynchronously
+        // run the appropriate function in parallel
         // TODO: handle exceptions that could arise
-        // std::async(std::launch::async, switchboard[op], j);
         try
         {
-        std::thread th(switchboard[op], j);
-        th.detach();
+            std::thread th(switchboard[op], j);
+            th.detach();
         } // replace this with actual error handling later
         catch (std::exception e)
         {
@@ -220,14 +202,48 @@ namespace discpp
         }
     }
 
-    /*
-    void connection::on_write(beast::error_code ec, std::size_t bytes_transferred)
-    {
-    }
-    */
-
     void connection::gw_dispatch(nlohmann::json j)
     {
+        BOOST_LOG_TRIVIAL(debug) << "Dispatch event received!";
+        // Parse the sequence number, which, for dispatch events, should exist
+        if (j.find("s") != j.end())
+        {
+            std::lock_guard<std::mutex> seq_lock(sequex);
+            seq_num = *j.find("s");
+        }
+        else
+        {
+            throw std::logic_error("Dispatch event missing sequence number!\n");
+        }
+
+        std::string event_name;
+        if (j.find("t") != j.end())
+        {
+            event_name = *j.find("t");
+            // Just a reminder, this is NOT unicode-safe, but event names should
+            // be ascii-only, so we're okay
+            std::transform(event_name.begin(), event_name.end(), event_name.begin(),
+                    [] (unsigned char ch) { return std::tolower(ch); });
+        }
+        else
+        {
+            throw std::logic_error("Dispatch event missing event name!\n");
+        }
+        // TODO: error check in case j doesn't contain the event data
+        nlohmann::json data = *j.find("d");
+
+        if (event_name == "ready")
+        {
+            try
+            {
+                event_ready(data);
+            }
+            catch (std::exception e)
+            {
+                BOOST_LOG_TRIVIAL(error) << e.what();
+            }
+        }
+
     }
 
     void connection::gw_heartbeat(nlohmann::json j)
@@ -269,7 +285,6 @@ namespace discpp
         heartbeat_interval = *subj.find("heartbeat_interval");
         BOOST_LOG_TRIVIAL(debug) << "Heartbeat interval is " << heartbeat_interval;
         // now we gotta queue up heartbeats!
-        // std::async(std::launch::async, &connection::heartbeat_loop, this);
         try
         {
             std::thread th(&connection::heartbeat_loop, this);
@@ -279,6 +294,10 @@ namespace discpp
         {
             BOOST_LOG_TRIVIAL(debug) << e.what();
         }
+
+        // Wait for the heartbeat code to announce that heartbit has changed
+        std::unique_lock<std::mutex> lock(idex);
+        cv.wait(lock);
 
         BOOST_LOG_TRIVIAL(debug) << "Sending an Identify...";
         std::ifstream token_stream("token");
@@ -329,11 +348,23 @@ namespace discpp
             // TODO: MANIPULATING MUTEXES BY HAND IS ASKING FOR TROUBLE; HANDLE
             // THIS WITH A LOCK_GUARD, IF POSSIBLE (or handle exceptions here!)
             BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
+
             writex.lock();
             write_queue.push(response.dump());
             writex.unlock();
 
+            // Announce to the "Identify" code that we've heartbeated
+            std::lock_guard<std::mutex> lock(idex);
+            // The actual value of heartbit doesn't matter
+            heartbit = !heartbit;
+            cv.notify_one();
+
             std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_interval));
         }
+    }
+
+    void connection::event_ready(nlohmann::json data)
+    {
+        BOOST_LOG_TRIVIAL(debug) << "Ready event received!";
     }
 }
