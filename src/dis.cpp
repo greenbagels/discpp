@@ -38,7 +38,7 @@ namespace discpp
 
     connection::connection()
     {
-        // Set up boost's trivial logger  
+        // Set up boost's trivial logger
         init_logger();
 
         // receiving an ACK is a precondition for all our heartbeats...
@@ -258,16 +258,21 @@ namespace discpp
         // TODO: error check in case j doesn't contain the event data
         nlohmann::json data = *j.find("d");
 
-        if (event_name == "READY")
+        try
         {
-            try
+            if (event_name == "READY")
             {
                 event_ready(data);
             }
-            catch (std::exception e)
+            if (event_name == "GUILD_CREATE")
             {
-                BOOST_LOG_TRIVIAL(error) << e.what();
+                event_guild_create(data);
             }
+        }
+        catch (std::exception& e)
+        {
+            BOOST_LOG_TRIVIAL(error) <<
+                "Exception occurred in dispatch event handler: " << e.what();
         }
 
     }
@@ -398,7 +403,7 @@ namespace discpp
         if (data.find("shard") != data.end())
         {
             std::vector<int> v = *data.find("shard");
-            std::copy(v.begin(), v.end(), shard.begin()); 
+            std::copy(v.begin(), v.end(), shard.begin());
         }
         if (data.find("guilds") != data.end())
         {
@@ -417,6 +422,45 @@ namespace discpp
                 }
                 guilds.push_back(g);
             }
+        }
+    }
+
+    void connection::event_guild_create(nlohmann::json data)
+    {
+        for (auto g = guilds.begin(); g != guilds.end(); g++)
+        {
+            if (g->id == *data.find("id"))
+            {
+                // TODO: parse all entries
+                g->name = *data.find("name");
+                if (data.find("permissions") != data.end())
+                {
+                    g->permissions = *data.find("permissions");
+                }
+                for (auto i = data.find("channels")->begin();
+                        i != data.find("channels")->end(); i++)
+                {
+                    detail::channel ch;
+                    parse_channel(ch, *i);
+                    g->channels.push_back(ch);
+                }
+            }
+        }
+    }
+
+    // TODO: this doesn't need to be coupled to the class really
+    void connection::parse_channel(detail::channel& ch, nlohmann::json& data)
+    {
+        // TODO: finish parsing
+        ch.id = *data.find("id");
+        ch.type = *data.find("type");
+        if (data.find("name") != data.end())
+        {
+            ch.name = *data.find("name");
+        }
+        if (data.find("topic") != data.end() && *data.find("topic") != nullptr)
+        {
+            ch.topic = *data.find("topic");
         }
     }
 }

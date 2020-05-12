@@ -289,7 +289,11 @@ namespace discpp
             void gw_heartbeat_ack(nlohmann::json);
 
             void heartbeat_loop();
+
             void event_ready(nlohmann::json);
+            void event_guild_create(nlohmann::json);
+
+            void parse_channel(detail::channel&, nlohmann::json&);
 
             bool heartbeat_ack;
             int seq_num;
