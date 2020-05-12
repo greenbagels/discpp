@@ -250,10 +250,6 @@ namespace discpp
         if (j.find("t") != j.end())
         {
             event_name = *j.find("t");
-            // Just a reminder, this is NOT unicode-safe, but event names should
-            // be ascii-only, so we're okay
-            std::transform(event_name.begin(), event_name.end(), event_name.begin(),
-                    [] (unsigned char ch) { return std::tolower(ch); });
         }
         else
         {
@@ -262,7 +258,7 @@ namespace discpp
         // TODO: error check in case j doesn't contain the event data
         nlohmann::json data = *j.find("d");
 
-        if (event_name == "ready")
+        if (event_name == "READY")
         {
             try
             {
