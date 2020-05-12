@@ -101,7 +101,16 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Received response:\n" << response;
 
         // now parse the json string singleton
-        nlohmann::json j = nlohmann::json::parse(response.body());
+        nlohmann::json j;
+        try
+        {
+            j = nlohmann::json::parse(response.body());
+        }
+        catch (nlohmann::json::parse_error& e)
+        {
+            BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received\n."
+                << "Message contents:\n" << response.body();
+        }
         // TODO: check failure
         // truncate leading "wss://", as the protocl is understood
         // todo: make this more pretty lol
@@ -163,11 +172,20 @@ namespace discpp
         bool keep_going = true;
         while (keep_going)
         {
+            beast::flat_buffer read_buffer;
             // so first, let's queue a read up for run()
             BOOST_LOG_TRIVIAL(debug) << "Starting synchronous read";
             stream->read(read_buffer);
             BOOST_LOG_TRIVIAL(debug) << "Executing read handler";
-            on_read();
+            on_read(read_buffer);
+            // By the time on_read() finishes, there should be at least one
+            // library dispatch thread running (or completed!)
+            while (!thread_pool.empty())
+            {
+                std::lock_guard<std::mutex> lock(poolex);
+                thread_pool.back().join();
+                thread_pool.pop_back();
+            }
             while (!write_queue.empty())
             {
                 // Just a note: if the gateway is waiting on us to send data,
@@ -183,20 +201,31 @@ namespace discpp
     }
 
     // TODO: change name (maybe)
-    void connection::on_read()
+    void connection::on_read(beast::flat_buffer read_buffer)
     {
         BOOST_LOG_TRIVIAL(debug) << "Read handler executed...";
-        nlohmann::json j =
-            nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
+        nlohmann::json j;
+        try
+        {
+            j = nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
+        }
+        catch(nlohmann::json::parse_error& e)
+        {
+            BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received\n."
+                << "Message contents:\n" << beast::buffers_to_string(read_buffer.data());
+            std::terminate();
+        }
         int op = *j.find("op");
         // run the appropriate function in parallel
         // TODO: handle exceptions that could arise
         try
         {
+            std::lock_guard<std::mutex> lock(poolex);
             std::thread th(switchboard[op], j);
-            th.detach();
+            thread_pool.push_back(std::move(th));
+            // th.detach();
         } // replace this with actual error handling later
-        catch (std::exception e)
+        catch (std::exception& e)
         {
             BOOST_LOG_TRIVIAL(error) << e.what();
         }
@@ -206,6 +235,7 @@ namespace discpp
     {
         BOOST_LOG_TRIVIAL(debug) << "Dispatch event received!";
         // Parse the sequence number, which, for dispatch events, should exist
+        BOOST_LOG_TRIVIAL(debug) << j.dump();
         if (j.find("s") != j.end())
         {
             std::lock_guard<std::mutex> seq_lock(sequex);
@@ -290,16 +320,16 @@ namespace discpp
             std::thread th(&connection::heartbeat_loop, this);
             th.detach();
         } // replace this just like the other try catch
-        catch (std::exception e)
+        catch (std::exception& e)
         {
             BOOST_LOG_TRIVIAL(debug) << e.what();
         }
 
         // Wait for the heartbeat code to announce that heartbit has changed
-        std::unique_lock<std::mutex> lock(idex);
-        cv.wait(lock);
+        // std::unique_lock<std::mutex> lock(idex);
+        // cv.wait(lock);
 
-        BOOST_LOG_TRIVIAL(debug) << "Sending an Identify...";
+        BOOST_LOG_TRIVIAL(info) << "Sending an Identify...";
         std::ifstream token_stream("token");
         std::stringstream ss;
         ss << token_stream.rdbuf();
@@ -313,9 +343,11 @@ namespace discpp
                                   }}
             }}
         };
+        BOOST_LOG_TRIVIAL(debug) << "Identify contains: " << response.dump();
         writex.lock();
         write_queue.push(response.dump());
         writex.unlock();
+        BOOST_LOG_TRIVIAL(debug) << "Pushed an Identify onto the queue...";
     }
 
     void connection::gw_heartbeat_ack(nlohmann::json j)
@@ -354,10 +386,10 @@ namespace discpp
             writex.unlock();
 
             // Announce to the "Identify" code that we've heartbeated
-            std::lock_guard<std::mutex> lock(idex);
+            // std::lock_guard<std::mutex> lock(idex);
             // The actual value of heartbit doesn't matter
-            heartbit = !heartbit;
-            cv.notify_one();
+            // heartbit = !heartbit;
+            // cv.notify_one();
 
             std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_interval));
         }
@@ -366,5 +398,29 @@ namespace discpp
     void connection::event_ready(nlohmann::json data)
     {
         BOOST_LOG_TRIVIAL(debug) << "Ready event received!";
+        session_id = std::move(*data.find("session_id"));
+        if (data.find("shard") != data.end())
+        {
+            std::vector<int> v = *data.find("shard");
+            std::copy(v.begin(), v.end(), shard.begin()); 
+        }
+        if (data.find("guilds") != data.end())
+        {
+            // *data.find("guilds") should be a std::vector of JSON objects
+            for (auto i = data.find("guilds")->begin();
+                    i != data.find("guilds")->end(); i++)
+            {
+                discpp::detail::guild g;
+                if (i->find("id") != i->end())
+                {
+                    g.id = *i->find("id");
+                }
+                if (i->find("unavailable") != i->end())
+                {
+                    g.unavailable = *i->find("unavailable");
+                }
+                guilds.push_back(g);
+            }
+        }
     }
 }
