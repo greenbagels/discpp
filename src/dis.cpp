@@ -19,6 +19,7 @@
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
+#include <boost/beast/websocket/error.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <boost/beast/version.hpp>
 // multithreading
@@ -44,6 +45,7 @@ namespace discpp
         // receiving an ACK is a precondition for all our heartbeats...
         // except the first!
         heartbeat_ack = true;
+        abort_hb = false;
     }
 
     void connection::init_logger()
@@ -108,8 +110,8 @@ namespace discpp
         }
         catch (nlohmann::json::parse_error& e)
         {
-            BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received\n."
-                << "Message contents:\n" << response.body();
+            BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received.\n"
+                << "Message contents:\n" << response;
         }
         // TODO: check failure
         // truncate leading "wss://", as the protocl is understood
@@ -144,7 +146,7 @@ namespace discpp
         sslc->set_default_verify_paths();
         sslc->set_verify_mode(ssl::verify_peer);
 
-        ioc = std::make_shared<net::io_context>();
+        ioc = std::make_shared<net::io_context>(4);
         tcp::resolver resolver{*ioc};
         stream = std::make_shared<websocket::stream<beast::ssl_stream<tcp::socket>>>(*ioc, *sslc);
         BOOST_LOG_TRIVIAL(debug) << "Resolving the url " << gateway_url << " now...";
@@ -170,38 +172,45 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Started main loop!";
         // first thing's first; we wait for the socket to have data to parse.
         bool keep_going = true;
+        //while (keep_going)
+        /*{
+            // beast::flat_buffer read_buffer;
+            // beast::error_code ec;
+            // so first, let's queue a read up for run()
+        */
+        read_thread = std::move(std::thread(&connection::start_reading, this));
+        write_thread = std::move(std::thread(&connection::start_writing, this)); 
+
         while (keep_going)
         {
-            beast::flat_buffer read_buffer;
-            // so first, let's queue a read up for run()
-            BOOST_LOG_TRIVIAL(debug) << "Starting synchronous read";
-            stream->read(read_buffer);
-            BOOST_LOG_TRIVIAL(debug) << "Executing read handler";
-            on_read(read_buffer);
-            // By the time on_read() finishes, there should be at least one
-            // library dispatch thread running (or completed!)
-            while (!thread_pool.empty())
-            {
-                std::lock_guard<std::mutex> lock(poolex);
-                thread_pool.back().join();
-                thread_pool.pop_back();
-            }
-            while (!write_queue.empty())
-            {
-                // Just a note: if the gateway is waiting on us to send data,
-                // and the write queue is empty (because all the event handlers
-                // are still busy), then we will deadlock on the next read!
-                BOOST_LOG_TRIVIAL(debug) << "Starting synchronous write";
-                stream->write(net::buffer(write_queue.front()));
-                writex.lock();
-                write_queue.pop();
-                writex.unlock();
-            }
+            // the run call will block until the socket is busy, so we don't
+            // have to worry about spinning!
+            BOOST_LOG_TRIVIAL(debug) << "Running the event loop";
+            ioc->run();
         }
     }
 
-    // TODO: change name (maybe)
-    void connection::on_read(beast::flat_buffer read_buffer)
+    void connection::start_reading()
+    {
+        // the call handler will handle locking the queue, pushing onto it,
+        // and then calling async_read again.
+        // TODO: change hard coded infinite loop to check some atomic bool
+        BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
+        stream->async_read(read_buffer, beast::bind_front_handler(
+                        &connection::on_read, this));
+    }
+
+    void connection::start_writing()
+    {
+        std::unique_lock<std::mutex> guard(writex);
+        BOOST_LOG_TRIVIAL(debug) << "Hit cv.wait() in start_writing()...";
+        cv.wait(guard, [&]{return !write_queue.empty();});
+        BOOST_LOG_TRIVIAL(debug) << "Calling async_write()...";
+        stream->async_write(net::buffer(write_queue.front()),
+                beast::bind_front_handler(&connection::on_write, this));
+    }
+
+    void connection::on_read(beast::error_code ec, std::size_t bytes_written)
     {
         BOOST_LOG_TRIVIAL(debug) << "Read handler executed...";
         nlohmann::json j;
@@ -220,15 +229,33 @@ namespace discpp
         // TODO: handle exceptions that could arise
         try
         {
-            std::lock_guard<std::mutex> lock(poolex);
-            std::thread th(switchboard[op], j);
-            thread_pool.push_back(std::move(th));
+            // std::lock_guard<std::mutex> lock(poolex);
+            // std::thread th(switchboard[op], j);
+            // thread_pool.push_back(std::move(th));
+            // Is threading the handler necessary?
+            switchboard[op](j);
             // th.detach();
         } // replace this with actual error handling later
         catch (std::exception& e)
         {
             BOOST_LOG_TRIVIAL(error) << e.what();
         }
+        // Queue another read!
+        read_buffer.clear();
+        BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
+        stream->async_read(read_buffer, beast::bind_front_handler(
+                    &connection::on_read, this));
+    }
+
+    void connection::on_write(beast::error_code ec, std::size_t bytes_written)
+    {
+        BOOST_LOG_TRIVIAL(debug) << "Write handler executed...";
+        // Handle the next write, if necessary. Wait for next write, if not.
+        std::unique_lock<std::mutex> guard(writex);
+        write_queue.pop();
+        cv.wait(guard, [&]{return !write_queue.empty();});
+        stream->async_write(net::buffer(write_queue.front()),
+            beast::bind_front_handler(&connection::on_write, this));
     }
 
     void connection::gw_dispatch(nlohmann::json j)
@@ -318,8 +345,9 @@ namespace discpp
         // now we gotta queue up heartbeats!
         try
         {
-            std::thread th(&connection::heartbeat_loop, this);
-            th.detach();
+            // TODO: handle resume destruction of this thread
+            hb_thread = std::move(std::thread(&connection::heartbeat_loop, this));
+            // th.detach();
         } // replace this just like the other try catch
         catch (std::exception& e)
         {
@@ -330,34 +358,70 @@ namespace discpp
         // std::unique_lock<std::mutex> lock(idex);
         // cv.wait(lock);
 
-        BOOST_LOG_TRIVIAL(info) << "Sending an Identify...";
+        // TODO: take \n out of the file, since that's technically part of the line
         std::ifstream token_stream("token");
         std::stringstream ss;
         ss << token_stream.rdbuf();
-        nlohmann::json response =
+
+        try{
+        if (session_id.empty())
         {
-            {"op", 2},
-            {"d", {{"token", ss.str().c_str()},
-                   {"properties", {{"$os", "linux"},
-                                   {"$browser", "discpp 0.01"},
-                                   {"$device", "discpp 0.01"}
-                                  }}
-            }}
-        };
-        BOOST_LOG_TRIVIAL(debug) << "Identify contains: " << response.dump();
-        writex.lock();
-        write_queue.push(response.dump());
-        writex.unlock();
-        BOOST_LOG_TRIVIAL(debug) << "Pushed an Identify onto the queue...";
+            BOOST_LOG_TRIVIAL(info) << "Sending an IDENTIFY...";
+            nlohmann::json response =
+            {
+                {"op", 2},
+                {"d", {{"token", ss.str().c_str()},
+                       {"properties", {{"$os", "linux"},
+                                       {"$browser", "discpp 0.01"},
+                                       {"$device", "discpp 0.01"}
+                                      }
+                       }
+                      }
+                }
+            };
+            BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
+            update_write_queue(response.dump());
+            BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
+        }
+        else
+        {
+            BOOST_LOG_TRIVIAL(info) << "Sending a RESUME...";
+            nlohmann::json response =
+            {
+                {"op", 6},
+                {"d", {{"token", ss.str().c_str()},
+                       {"session_id", session_id.c_str()},
+                       {"seq", seq_num}
+                      }
+                }
+            };
+            BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
+            update_write_queue(response.dump());
+            BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
+        }
+        }
+        catch (std::exception& e)
+        {
+            BOOST_LOG_TRIVIAL(error) << e.what();
+        }
+    }
+
+    void connection::update_write_queue(std::string message)
+    {
+        {
+            std::lock_guard<std::mutex> guard(writex);
+            write_queue.push(message);
+        }
+        cv.notify_all();
     }
 
     void connection::gw_heartbeat_ack(nlohmann::json j)
     {
         BOOST_LOG_TRIVIAL(debug) << "Heartbeat ACK received!";
-        heartex.lock();
+        // heartex.lock();
         // TODO: check if already 1, because then a mistake happened!
         heartbeat_ack = 1;
-        heartex.unlock();
+        // heartex.unlock();
     }
 
     void connection::heartbeat_loop()
@@ -365,26 +429,26 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Heartbeat loop started";
         while(true)
         {
-            heartex.lock();
+            if (abort_hb)
+            {
+                return;
+            }
+            // heartex.lock();
             if (!heartbeat_ack)
             {
                 BOOST_LOG_TRIVIAL(error) << "Haven't received a heartbeat ACK!";
                 throw std::runtime_error("Possible zombie connection... terminating!");
             }
             heartbeat_ack = 0;
-            heartex.unlock();
+            // heartex.unlock();
 
             nlohmann::json response;
             response["op"] = 1;
             // TODO: allow resuming by sequence number
             response["d"] = "null";
-            // TODO: MANIPULATING MUTEXES BY HAND IS ASKING FOR TROUBLE; HANDLE
-            // THIS WITH A LOCK_GUARD, IF POSSIBLE (or handle exceptions here!)
             BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
 
-            writex.lock();
-            write_queue.push(response.dump());
-            writex.unlock();
+            update_write_queue(response.dump());
 
             // Announce to the "Identify" code that we've heartbeated
             // std::lock_guard<std::mutex> lock(idex);

@@ -260,7 +260,7 @@ namespace discpp
     namespace ssl = net::ssl;
     using tcp = net::ip::tcp;
 
-    class connection : public std::enable_shared_from_this<connection>
+    class connection // : public std::enable_shared_from_this<connection>
     {
         // TODO: consider whether these functions actually need to be visible
         // to the library end-user, or whether we can hide them in a detail
@@ -274,7 +274,13 @@ namespace discpp
             void main_loop();
 
         private:
-            void on_read(beast::flat_buffer);
+            void on_read(beast::error_code, std::size_t);
+            void on_write(beast::error_code, std::size_t);
+
+            void start_reading();
+            void start_writing();
+
+            void update_write_queue(std::string message);
 
             void gw_dispatch(nlohmann::json);
             void gw_heartbeat(nlohmann::json);
@@ -295,7 +301,8 @@ namespace discpp
 
             void parse_channel(detail::channel&, nlohmann::json&);
 
-            bool heartbeat_ack;
+            std::atomic_bool heartbeat_ack;
+            std::condition_variable cv;
             int seq_num;
 
             std::array<int, 2> shard;
@@ -304,14 +311,17 @@ namespace discpp
             std::string gateway_url;
             std::string session_id;
             std::size_t heartbeat_interval;
+            std::thread hb_thread;
+            std::atomic_bool abort_hb;
+            beast::flat_buffer read_buffer;
 
             std::shared_ptr<ssl::context> sslc;
             std::shared_ptr<net::io_context> ioc;
             std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
 
             std::queue<std::string> write_queue;
-            std::mutex heartex, writex, sequex, poolex;
-            std::vector<std::thread> thread_pool;
+            std::mutex heartex, readex, writex, sequex, poolex;
+            std::thread read_thread, write_thread;
 
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
             {
