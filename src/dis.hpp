@@ -2,7 +2,7 @@
 #define DIS_HPP
 
 #include <array>
-#include <functional>
+#include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
@@ -11,17 +11,16 @@
 // for json
 #include "json.hpp"
 
+// Required by boost::beast for async io
 #include <boost/asio.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/ip/tcp.hpp>
 
-#include <boost/beast/core.hpp>
-#include <boost/beast/http.hpp>
+// For html/websockets
+// NOTE: needs boost >=1.68 for beast+ssl
+#include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
-#include <boost/beast/version.hpp>
 
 namespace discpp
 {

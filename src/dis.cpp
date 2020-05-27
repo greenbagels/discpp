@@ -8,31 +8,13 @@
 #include <boost/log/expressions.hpp>
 // nlohmann::json
 #include "json.hpp"
-// Required by boost::beast for async io
-#include <boost/asio.hpp>
-#include <boost/asio/ssl/error.hpp>
-#include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/ip/tcp.hpp>
-// For html/websockets
-// NOTE: needs boost >=1.68 for beast+ssl
-#include <boost/beast/core.hpp>
-#include <boost/beast/http.hpp>
-#include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/error.hpp>
-#include <boost/beast/websocket/ssl.hpp>
-#include <boost/beast/version.hpp>
-// multithreading
-#include <thread>
-#include <mutex>
 // for regular io
 #include <iostream>
 #include <fstream>
+// std::bind
+#include <functional>
 // self explanatory
-#include <vector>
 #include <stdexcept>
-// For tolower
-#include <cctype>
 
 namespace discpp
 {
