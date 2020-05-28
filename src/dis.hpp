@@ -300,8 +300,8 @@ namespace discpp
 
             void parse_channel(detail::channel&, nlohmann::json&);
 
-            std::atomic_bool heartbeat_ack;
-            std::condition_variable cv;
+            std::atomic_bool heartbeat_ack, pending_write;
+            std::condition_variable cv_wq_empty, cv_pending_write;
             int seq_num;
 
             std::array<int, 2> shard;
@@ -316,10 +316,11 @@ namespace discpp
 
             std::shared_ptr<ssl::context> sslc;
             std::shared_ptr<net::io_context> ioc;
+            std::shared_ptr<net::io_context::strand> strand;
             std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
 
             std::queue<std::string> write_queue;
-            std::mutex heartex, readex, writex, sequex, poolex;
+            std::mutex heartex, readex, writex, sequex, poolex, pendex;
             std::thread read_thread, write_thread;
 
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
