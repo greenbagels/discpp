@@ -33,7 +33,9 @@ namespace discpp
 
     void connection::init_logger()
     {
-        // for now, use the default clog output
+        // for now, use the default clog output with the trivial logger.
+        // by default, if boost::log was built with multithreading enabled,
+        // the logger that's used is the thread-safe _mt version
         boost::log::core::get()->set_filter
         (
             // TODO: add parameter dictating sink
@@ -50,6 +52,8 @@ namespace discpp
         sslc->set_default_verify_paths();
         sslc->set_verify_mode(ssl::verify_peer);
 
+        // This IOC will be reassigned when we connect to the gateway, but it is
+        // possible to reuse the context if desired.
         ioc = std::make_shared<net::io_context>();
         tcp::resolver resolver{*ioc};
         beast::ssl_stream<beast::tcp_stream> ssl_stream(*ioc, *sslc);
@@ -58,6 +62,8 @@ namespace discpp
         if (! SSL_set_tlsext_host_name(ssl_stream.native_handle(), rest_url.c_str()))
         {
             beast::error_code err{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
+            // TODO: this is currently unhandled, we should address it in our
+            // future error handling overhaul
             throw beast::system_error{err};
         }
 
@@ -213,6 +219,8 @@ namespace discpp
             net::post(*strand, beast::bind_front_handler(&connection::on_read, shared_from_this(), ec, bytes_written));
             return;
         }
+
+        // This will hold our parsed JSON event data from the gateway
         nlohmann::json j;
         try
         {
@@ -225,8 +233,9 @@ namespace discpp
             std::terminate();
         }
         int op = *j.find("op");
-        // run the appropriate function in parallel
-        // TODO: handle exceptions that could arise
+        // run the appropriate function in serial for now; we can switch to a
+        // parallel model later, if the need justifies the added complexity and
+        // overhead from spawning threads.
         try
         {
             // Just to avoid painful blocks of switches, we just use a
@@ -281,7 +290,7 @@ namespace discpp
     {
         BOOST_LOG_TRIVIAL(debug) << "Write handler executed...";
         // Reschedule for the strand
-        if (ec)
+        if (ec.value())
         {
             // TODO: handle errors gracefully, and more consistently
             BOOST_LOG_TRIVIAL(error) << "Error in on_write(): " << ec.message();
@@ -316,10 +325,6 @@ namespace discpp
             BOOST_LOG_TRIVIAL(debug) << "Waiting thread notified.";
             return;
         }
-        // If we have a lot of mutex contention (which likely will happen
-        // because of how... spontaneous this code writing session is, we should
-        // forego the attempt to minimize mutex fidgeting, i think.
-        // Honestly it feels like we should have problems with TOCTOU here...
         // Handle the next write
         BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << write_queue.front();
         stream->async_write(net::buffer(write_queue.front()),
