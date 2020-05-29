@@ -229,7 +229,7 @@ namespace discpp
             std::string system_channel_id;
             int system_channel_flags;
             std::string rules_channel_id;
-            // TODO: handle this as a proper 8601 timestamp
+            // TODO: handle shared_from_this() as a proper 8601 timestamp
             std::string joined_at;
             bool large;
             bool unavailable;
@@ -259,7 +259,7 @@ namespace discpp
     namespace ssl = net::ssl;
     using tcp = net::ip::tcp;
 
-    class connection // : public std::enable_shared_from_this<connection>
+    class connection : public std::enable_shared_from_this<connection>
     {
         // TODO: consider whether these functions actually need to be visible
         // to the library end-user, or whether we can hide them in a detail
@@ -312,7 +312,7 @@ namespace discpp
             std::size_t heartbeat_interval;
             std::thread hb_thread;
             std::atomic_bool abort_hb;
-            beast::flat_buffer read_buffer;
+            std::shared_ptr<beast::flat_buffer> read_buffer;
 
             std::shared_ptr<ssl::context> sslc;
             std::shared_ptr<net::io_context> ioc;
@@ -320,23 +320,22 @@ namespace discpp
             std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
 
             std::queue<std::string> write_queue;
-            std::mutex heartex, readex, writex, sequex, poolex, pendex;
-            std::thread read_thread, write_thread;
+            std::mutex heartex, writex, sequex, pendex;
 
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
             {
-                [this](nlohmann::json j) { this -> gw_dispatch(j);      },
-                [this](nlohmann::json j) { this -> gw_heartbeat(j);     },
-                [this](nlohmann::json j) { this -> gw_identify(j);      },
-                [this](nlohmann::json j) { this -> gw_presence(j);      },
-                [this](nlohmann::json j) { this -> gw_voice_state(j);   },
-                [    ](nlohmann::json j) {                              },
-                [this](nlohmann::json j) { this -> gw_resume(j);        },
-                [this](nlohmann::json j) { this -> gw_reconnect(j);     },
-                [this](nlohmann::json j) { this -> gw_req_guild(j);     },
-                [this](nlohmann::json j) { this -> gw_invalid(j);       },
-                [this](nlohmann::json j) { this -> gw_hello(j);         },
-                [this](nlohmann::json j) { this -> gw_heartbeat_ack(j); }
+                [this](nlohmann::json j) { shared_from_this() -> gw_dispatch(j);      },
+                [this](nlohmann::json j) { shared_from_this() -> gw_heartbeat(j);     },
+                [this](nlohmann::json j) { shared_from_this() -> gw_identify(j);      },
+                [this](nlohmann::json j) { shared_from_this() -> gw_presence(j);      },
+                [this](nlohmann::json j) { shared_from_this() -> gw_voice_state(j);   },
+                [    ](nlohmann::json j) {                                            },
+                [this](nlohmann::json j) { shared_from_this() -> gw_resume(j);        },
+                [this](nlohmann::json j) { shared_from_this() -> gw_reconnect(j);     },
+                [this](nlohmann::json j) { shared_from_this() -> gw_req_guild(j);     },
+                [this](nlohmann::json j) { shared_from_this() -> gw_invalid(j);       },
+                [this](nlohmann::json j) { shared_from_this() -> gw_hello(j);         },
+                [this](nlohmann::json j) { shared_from_this() -> gw_heartbeat_ack(j); }
             };
     };
 

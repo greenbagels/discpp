@@ -128,6 +128,8 @@ namespace discpp
         sslc->set_default_verify_paths();
         sslc->set_verify_mode(ssl::verify_peer);
 
+        // We're going to keep this io_context during the entire lifetime of the
+        // session.
         ioc = std::make_shared<net::io_context>();
         strand = std::make_shared<net::io_context::strand>(*ioc);
         tcp::resolver resolver{*ioc};
@@ -156,7 +158,7 @@ namespace discpp
         // first thing's first; we wait for the socket to have data to parse.
         bool keep_going = true;
 
-        std::thread write_watcher(&connection::start_writing, this);
+        std::thread write_watcher(&connection::start_writing, shared_from_this());
         start_reading();
 
         while (keep_going)
@@ -177,7 +179,7 @@ namespace discpp
             BOOST_LOG_TRIVIAL(debug) << "Read handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand, std::bind(&connection::start_reading, this));
+            net::post(*strand, beast::bind_front_handler(&connection::start_reading, shared_from_this()));
             return;
         }
         BOOST_LOG_TRIVIAL(debug) << "We are in the strand! Continuing with reads...";
@@ -186,31 +188,38 @@ namespace discpp
         // and then calling async_read again.
         // TODO: change hard coded infinite loop to check some atomic bool
         BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
-        beast::flat_buffer read_buffer;
-        stream->async_read(read_buffer, beast::bind_front_handler(
-                        &connection::on_read, this));
+        read_buffer = std::make_shared<beast::flat_buffer>();
+        stream->async_read(*read_buffer, beast::bind_front_handler(
+                        &connection::on_read, shared_from_this()));
     }
 
     void connection::on_read(beast::error_code ec, std::size_t bytes_written)
     {
         BOOST_LOG_TRIVIAL(debug) << "Read handler executed...";
+
+        if (ec.value())
+        {
+            BOOST_LOG_TRIVIAL(error) << "Error in on_read():\n" << ec.message();
+            std::terminate();
+        }
+
         if (!strand->running_in_this_thread())
         {
             BOOST_LOG_TRIVIAL(debug) << "Read handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand, std::bind(&connection::on_read, this, ec, bytes_written));
+            net::post(*strand, beast::bind_front_handler(&connection::on_read, shared_from_this(), ec, bytes_written));
             return;
         }
         nlohmann::json j;
         try
         {
-            j = nlohmann::json::parse(beast::buffers_to_string(read_buffer.data()));
+            j = nlohmann::json::parse(beast::buffers_to_string(read_buffer->data()));
         }
         catch(nlohmann::json::parse_error& e)
         {
             BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received.\n"
-                << "Message contents:\n" << beast::buffers_to_string(read_buffer.data());
+                << "Message contents:\n" << beast::buffers_to_string(read_buffer->data());
             std::terminate();
         }
         int op = *j.find("op");
@@ -218,23 +227,22 @@ namespace discpp
         // TODO: handle exceptions that could arise
         try
         {
-            // std::lock_guard<std::mutex> lock(poolex);
-            // std::thread th(switchboard[op], j);
-            // thread_pool.push_back(std::move(th));
-            // Is threading the handler necessary?
+            // Just to avoid painful blocks of switches, we just use a
+            // "switchboard" of lambda expressions indexed by opcode!
             switchboard[op](j);
             BOOST_LOG_TRIVIAL(debug) << "Responded to network input.";
-            // th.detach();
         } // replace this with actual error handling later
         catch (std::exception& e)
         {
             BOOST_LOG_TRIVIAL(error) << e.what();
         }
-        // Queue another read!
-        read_buffer.clear();
+        // Queue another read! We want to reset the buffer, but beast doesn't
+        // currently (1.73) support reusing asio dynamic buffers. So we'll just
+        // keep making new ones for now (letting the destructor free the memory)
+        read_buffer = std::make_shared<beast::flat_buffer>();
         BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
-        stream->async_read(read_buffer, beast::bind_front_handler(
-                    &connection::on_read, this));
+        stream->async_read(*read_buffer, beast::bind_front_handler(
+                    &connection::on_read, shared_from_this()));
     }
 
     void connection::start_writing()
@@ -242,20 +250,21 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Called start_writing()...";
         if (strand->running_in_this_thread())
         {
-            BOOST_LOG_TRIVIAL(debug) << "Strand is running in this thread... halting problem incoming!";
+            BOOST_LOG_TRIVIAL(debug) << "Strand is running in the waiting thread!";
         }
         // we need two condition variables, so we don't wake the wrong one
         BOOST_LOG_TRIVIAL(debug) << "Waiting for pending writes to finish...";
         std::unique_lock<std::mutex> pend_guard(pendex);
         // Hopefully we aren't on the strand, or else this will block.
-        cv_pending_write.wait_for(pend_guard, std::chrono::seconds(5), [&]{return !pending_write;});
+        cv_pending_write.wait(pend_guard, [&]{return !pending_write;});
         BOOST_LOG_TRIVIAL(debug) << "No pending writes found!";
+        pending_write = true;
         pend_guard.unlock();
         BOOST_LOG_TRIVIAL(debug) << "Waiting for the write queue to populate...";
         std::unique_lock<std::mutex> queue_guard(writex);
         BOOST_LOG_TRIVIAL(trace) << "Hit cv_wq_empty.wait() in start_writing()...";
         // This will also block the current strand...
-        cv_wq_empty.wait_for(queue_guard, std::chrono::seconds(5), [&]{return !write_queue.empty();});
+        cv_wq_empty.wait(queue_guard, [&]{return !write_queue.empty();});
         BOOST_LOG_TRIVIAL(debug) << "Write queue is nonempty!";
         queue_guard.unlock();
         BOOST_LOG_TRIVIAL(debug) << "Attempting to get on the strand to write...";
@@ -273,12 +282,14 @@ namespace discpp
             BOOST_LOG_TRIVIAL(debug) << "Write handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand, beast::bind_front_handler(&connection::on_write, this, ec, bytes_written));
+            net::post(*strand,
+                beast::bind_front_handler(&connection::on_write, shared_from_this(), ec, bytes_written));
             return;
         }
         BOOST_LOG_TRIVIAL(debug) << "We are in the strand! Continuing with writes...";
 
-        writex.lock();
+        std::lock_guard<std::mutex> wg(writex);
+        BOOST_LOG_TRIVIAL(trace) << "on_write acquired write_queue lock!";
         if (write_queue.empty())
         {
             BOOST_LOG_TRIVIAL(debug) << "Write queue flushed. Notifying waiting thread now.";
@@ -288,7 +299,6 @@ namespace discpp
             }
             // Tell the waiter thread it's okay to start waiting for work
             cv_pending_write.notify_all();
-            writex.unlock();
             // cv_wq_empty.notify_all();
             BOOST_LOG_TRIVIAL(debug) << "Waiting thread notified.";
             return;
@@ -296,19 +306,13 @@ namespace discpp
         // If we have a lot of mutex contention (which likely will happen
         // because of how... spontaneous this code writing session is, we should
         // forego the attempt to minimize mutex fidgeting, i think.
-        writex.unlock();
         // Honestly it feels like we should have problems with TOCTOU here...
-
-        // we have the lock on the logical writing process, so-to-speak.
-        pendex.lock();
-        pending_write = true;
-        pendex.unlock();
         // Handle the next write
-        writex.lock();
-        auto buf = net::buffer(write_queue.front());
+        BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << write_queue.front();
+        stream->async_write(net::buffer(write_queue.front()),
+                beast::bind_front_handler(&connection::on_write, shared_from_this()));
+        BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
         write_queue.pop();
-        writex.unlock();
-        stream->async_write(buf, beast::bind_front_handler(&connection::on_write, this));
     }
 
     void connection::gw_dispatch(nlohmann::json j)
@@ -400,7 +404,7 @@ namespace discpp
         {
             BOOST_LOG_TRIVIAL(debug) << "Starting heartbeat loop thread now!\n";
             // TODO: handle resume destruction of this thread
-            hb_thread = std::move(std::thread(&connection::heartbeat_loop, this));
+            hb_thread = std::move(std::thread(&connection::heartbeat_loop, shared_from_this()));
             // th.detach();
         } // replace this just like the other try catch
         catch (std::exception& e)
@@ -417,42 +421,44 @@ namespace discpp
         std::stringstream ss;
         ss << token_stream.rdbuf();
 
-        try{
-        if (session_id.empty())
+        try
         {
-            BOOST_LOG_TRIVIAL(info) << "Sending an IDENTIFY...";
-            nlohmann::json response =
+            if (session_id.empty())
             {
-                {"op", 2},
-                {"d", {{"token", ss.str().c_str()},
-                       {"properties", {{"$os", "linux"},
-                                       {"$browser", "discpp 0.01"},
-                                       {"$device", "discpp 0.01"}
-                                      }
-                       }
-                      }
-                }
-            };
-            BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
-            update_write_queue(response.dump());
-            BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
-        }
-        else
-        {
-            BOOST_LOG_TRIVIAL(info) << "Sending a RESUME...";
-            nlohmann::json response =
+                BOOST_LOG_TRIVIAL(info) << "Sending an IDENTIFY...";
+                nlohmann::json response =
+                {
+                    {"op", 2},
+                    {"d", {{"token", ss.str().c_str()},
+                           {"properties", {{"$os", "linux"},
+                                           {"$browser", "discpp 0.01"},
+                                           {"$device", "discpp 0.01"}
+                                          }
+                           }
+                          }
+                    }
+                };
+                BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
+                update_write_queue(response.dump());
+                BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
+            }
+
+            else
             {
-                {"op", 6},
-                {"d", {{"token", ss.str().c_str()},
-                       {"session_id", session_id.c_str()},
-                       {"seq", seq_num}
-                      }
-                }
-            };
-            BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
-            update_write_queue(response.dump());
-            BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
-        }
+                BOOST_LOG_TRIVIAL(info) << "Sending a RESUME...";
+                nlohmann::json response =
+                {
+                    {"op", 6},
+                    {"d", {{"token", ss.str().c_str()},
+                           {"session_id", session_id.c_str()},
+                           {"seq", seq_num}
+                          }
+                    }
+                };
+                BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
+                update_write_queue(response.dump());
+                BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
+            }
         }
         catch (std::exception& e)
         {
@@ -489,14 +495,14 @@ namespace discpp
             {
                 return;
             }
-            // heartex.lock();
             if (!heartbeat_ack)
             {
                 BOOST_LOG_TRIVIAL(error) << "Haven't received a heartbeat ACK!";
+                // TODO: shutdown gracefully, or reconnect
                 throw std::runtime_error("Possible zombie connection... terminating!");
             }
+            // this is atomic, and we don't particuarly care about mutex in this fn
             heartbeat_ack = 0;
-            // heartex.unlock();
 
             nlohmann::json response;
             response["op"] = 1;
@@ -506,13 +512,8 @@ namespace discpp
 
             update_write_queue(response.dump());
 
-            // Announce to the "Identify" code that we've heartbeated
-            // std::lock_guard<std::mutex> lock(idex);
-            // The actual value of heartbit doesn't matter
-            // heartbit = !heartbit;
-            // cv.notify_one();
-
             BOOST_LOG_TRIVIAL(debug) << "Putting heartbeat thread to sleep!";
+            // TODO: switch to async_timer
             std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_interval));
         }
     }
