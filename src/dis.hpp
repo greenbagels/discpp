@@ -263,7 +263,10 @@ namespace discpp
     {
         // TODO: consider whether these functions actually need to be visible
         // to the library end-user, or whether we can hide them in a detail
-        // implementation.
+        // implementation or added abstraction layer. For instance, we can try
+        // to implement one-class-one-purpose by having a class shimming the
+        // API functionality with the boost::asio/beast implementation details.
+
         public:
             connection();
             void init_logger();
@@ -302,6 +305,8 @@ namespace discpp
 
             std::atomic_bool heartbeat_ack, pending_write;
             std::condition_variable cv_wq_empty, cv_pending_write;
+
+            // Used for resuming connections and replaying missed data
             int seq_num;
 
             std::array<int, 2> shard;
@@ -312,6 +317,7 @@ namespace discpp
             std::size_t heartbeat_interval;
             std::thread hb_thread;
             std::atomic_bool abort_hb;
+            std::atomic_bool keep_going;
             std::shared_ptr<beast::flat_buffer> read_buffer;
 
             std::shared_ptr<ssl::context> sslc;
@@ -322,6 +328,12 @@ namespace discpp
             std::queue<std::string> write_queue;
             std::mutex heartex, writex, sequex, pendex;
 
+            // This array is indexed by discord gateway API opcodes. We use it to
+            // avoid using switch statements, which may incur a performance penalty
+            // as the program performs a memory lookup instead of using a jump table.
+            // For elegance, we keep it this way for now. Let's look into the performance
+            // implications at a later time.
+
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
             {
                 [this](nlohmann::json j) { shared_from_this() -> gw_dispatch(j);      },
@@ -329,7 +341,9 @@ namespace discpp
                 [this](nlohmann::json j) { shared_from_this() -> gw_identify(j);      },
                 [this](nlohmann::json j) { shared_from_this() -> gw_presence(j);      },
                 [this](nlohmann::json j) { shared_from_this() -> gw_voice_state(j);   },
-                [    ](nlohmann::json j) {                                            },
+                // The opcode 5 is not currently used in the API. Let's suppress warnings
+                // made by the compiler about the unused parameter.
+                [    ](nlohmann::json j) { boost::ignore_unused(j);                   },
                 [this](nlohmann::json j) { shared_from_this() -> gw_resume(j);        },
                 [this](nlohmann::json j) { shared_from_this() -> gw_reconnect(j);     },
                 [this](nlohmann::json j) { shared_from_this() -> gw_req_guild(j);     },

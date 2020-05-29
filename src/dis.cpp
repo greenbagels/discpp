@@ -28,6 +28,7 @@ namespace discpp
         heartbeat_ack = true;
         abort_hb = false;
         pending_write = false;
+        keep_going = true;
     }
 
     void connection::init_logger()
@@ -156,7 +157,6 @@ namespace discpp
     {
         BOOST_LOG_TRIVIAL(debug) << "Started main loop!";
         // first thing's first; we wait for the socket to have data to parse.
-        bool keep_going = true;
 
         std::thread write_watcher(&connection::start_writing, shared_from_this());
         start_reading();
@@ -199,8 +199,10 @@ namespace discpp
 
         if (ec.value())
         {
-            BOOST_LOG_TRIVIAL(error) << "Error in on_read():\n" << ec.message();
-            std::terminate();
+            // TODO: add in actual error handling
+            BOOST_LOG_TRIVIAL(error) << "Error in on_read(): " << ec.message();
+            keep_going = false;
+            return;
         }
 
         if (!strand->running_in_this_thread())
@@ -229,6 +231,7 @@ namespace discpp
         {
             // Just to avoid painful blocks of switches, we just use a
             // "switchboard" of lambda expressions indexed by opcode!
+            // TODO: Handle gateway close events
             switchboard[op](j);
             BOOST_LOG_TRIVIAL(debug) << "Responded to network input.";
         } // replace this with actual error handling later
@@ -248,35 +251,44 @@ namespace discpp
     void connection::start_writing()
     {
         BOOST_LOG_TRIVIAL(debug) << "Called start_writing()...";
-        if (strand->running_in_this_thread())
+        while (keep_going)
         {
-            BOOST_LOG_TRIVIAL(debug) << "Strand is running in the waiting thread!";
+            if (strand->running_in_this_thread())
+            {
+                BOOST_LOG_TRIVIAL(debug) << "Strand is running in the waiting thread!";
+            }
+            // we need two condition variables, so we don't wake the wrong one
+            BOOST_LOG_TRIVIAL(debug) << "Waiting for pending writes to finish...";
+            std::unique_lock<std::mutex> pend_guard(pendex);
+            // Hopefully we aren't on the strand, or else this will block.
+            cv_pending_write.wait(pend_guard, [&]{return !pending_write;});
+            BOOST_LOG_TRIVIAL(debug) << "No pending writes found!";
+            pending_write = true;
+            pend_guard.unlock();
+            BOOST_LOG_TRIVIAL(debug) << "Waiting for the write queue to populate...";
+            std::unique_lock<std::mutex> queue_guard(writex);
+            BOOST_LOG_TRIVIAL(trace) << "Hit cv_wq_empty.wait() in start_writing()...";
+            // This will also block the current strand...
+            cv_wq_empty.wait(queue_guard, [&]{return !write_queue.empty();});
+            BOOST_LOG_TRIVIAL(debug) << "Write queue is nonempty!";
+            queue_guard.unlock();
+            BOOST_LOG_TRIVIAL(debug) << "Attempting to get on the strand to write...";
+            on_write(beast::error_code(), 0); // initial write call
         }
-        // we need two condition variables, so we don't wake the wrong one
-        BOOST_LOG_TRIVIAL(debug) << "Waiting for pending writes to finish...";
-        std::unique_lock<std::mutex> pend_guard(pendex);
-        // Hopefully we aren't on the strand, or else this will block.
-        cv_pending_write.wait(pend_guard, [&]{return !pending_write;});
-        BOOST_LOG_TRIVIAL(debug) << "No pending writes found!";
-        pending_write = true;
-        pend_guard.unlock();
-        BOOST_LOG_TRIVIAL(debug) << "Waiting for the write queue to populate...";
-        std::unique_lock<std::mutex> queue_guard(writex);
-        BOOST_LOG_TRIVIAL(trace) << "Hit cv_wq_empty.wait() in start_writing()...";
-        // This will also block the current strand...
-        cv_wq_empty.wait(queue_guard, [&]{return !write_queue.empty();});
-        BOOST_LOG_TRIVIAL(debug) << "Write queue is nonempty!";
-        queue_guard.unlock();
-        BOOST_LOG_TRIVIAL(debug) << "Attempting to get on the strand to write...";
-        on_write(beast::error_code(), 0); // initial write call
-        // Let's hope this tail-call is optimized to a JMP instead of a CALL.
-        start_writing();
     }
 
     void connection::on_write(beast::error_code ec, std::size_t bytes_written)
     {
         BOOST_LOG_TRIVIAL(debug) << "Write handler executed...";
         // Reschedule for the strand
+        if (ec)
+        {
+            // TODO: handle errors gracefully, and more consistently
+            BOOST_LOG_TRIVIAL(error) << "Error in on_write(): " << ec.message();
+            keep_going = false;
+            return;
+        }
+
         if (!strand->running_in_this_thread())
         {
             BOOST_LOG_TRIVIAL(debug) << "Write handler not running in the strand..."
@@ -286,6 +298,7 @@ namespace discpp
                 beast::bind_front_handler(&connection::on_write, shared_from_this(), ec, bytes_written));
             return;
         }
+
         BOOST_LOG_TRIVIAL(debug) << "We are in the strand! Continuing with writes...";
 
         std::lock_guard<std::mutex> wg(writex);
@@ -363,34 +376,42 @@ namespace discpp
 
     void connection::gw_heartbeat(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_identify(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_presence(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_voice_state(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_resume(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_reconnect(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_req_guild(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_invalid(nlohmann::json j)
     {
+        boost::ignore_unused(j);
     }
 
     void connection::gw_hello(nlohmann::json j)
@@ -404,7 +425,7 @@ namespace discpp
         {
             BOOST_LOG_TRIVIAL(debug) << "Starting heartbeat loop thread now!\n";
             // TODO: handle resume destruction of this thread
-            hb_thread = std::move(std::thread(&connection::heartbeat_loop, shared_from_this()));
+            hb_thread = std::thread(&connection::heartbeat_loop, shared_from_this());
             // th.detach();
         } // replace this just like the other try catch
         catch (std::exception& e)
@@ -484,6 +505,7 @@ namespace discpp
         // TODO: check if already 1, because then a mistake happened!
         heartbeat_ack = 1;
         // heartex.unlock();
+        boost::ignore_unused(j);
     }
 
     void connection::heartbeat_loop()
