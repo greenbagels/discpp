@@ -1,0 +1,13 @@
+token
+json.hpp
+*.o
+*.so
+*.a
+*.exe
+*.out
+*.log
+build/*
+CMakeCache.txt
+CMakeFiles/*
+Makefile
+
