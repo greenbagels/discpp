@@ -13,6 +13,20 @@ file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# First, we set global error flags that should work with everything
+target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_options(discpp PRIVATE -g0 -O3 -march=native)
+elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_compile_options(discpp PRIVATE -g  -O3 -march=native)
+elseif (CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    target_compile_options(discpp PRIVATE -g0 -Os)
+    target_link_options(discpp PRIVATE -s)
+else() # Assume debug
+    target_compile_options(discpp PRIVATE -g  -O0)
+endif()
+
 # External library settings
 set(Boost_USE_STATIC_LIBS OFF)
 set(Boost_USE_MULTITHREADED ON)
