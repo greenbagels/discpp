@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # First, we set global error flags that should work with everything
-target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror -Wfatal-errors)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(discpp PRIVATE -g0 -O3 -march=native)
