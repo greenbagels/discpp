@@ -268,22 +268,15 @@ namespace discpp
         };
     }
 
-    namespace beast = boost::beast;
-    namespace http = beast::http;
-    namespace websocket = beast::websocket;
-    namespace net = boost::asio;
-    namespace ssl = net::ssl;
-    using tcp = net::ip::tcp;
-
-    class discpp_context
+    class context
     {
         public:
-            discpp_context();
-            ssl::context &ssl_context();
-            net::io_context &io_context();
+            context();
+            auto &ssl_context();
+            auto &io_context();
         private:
-            ssl::context sslc;
-            net::io_context ioc;
+            boost::asio::ssl::context sslc;
+            boost::asio::io_context ioc;
     };
 
     class connection : public std::enable_shared_from_this<connection>
@@ -297,14 +290,13 @@ namespace discpp
         public:
             connection();
             void init_logger();
-            // void get_gateway(std::string rest_url = "discordapp.com");
             void gateway_connect(int ver = 6, std::string encoding = "json",
             bool compression = false);
             void main_loop();
 
         private:
-            void on_read(beast::error_code, std::size_t);
-            void on_write(beast::error_code, std::size_t);
+            void on_read(boost::beast::error_code, std::size_t);
+            void on_write(boost::beast::error_code, std::size_t);
 
             void start_reading();
             void start_writing();
@@ -345,12 +337,14 @@ namespace discpp
             std::thread hb_thread;
             std::atomic_bool abort_hb;
             std::atomic_bool keep_going;
-            std::shared_ptr<beast::flat_buffer> read_buffer;
+            std::shared_ptr<boost::beast::flat_buffer> read_buffer;
 
-            std::shared_ptr<ssl::context> sslc;
-            std::shared_ptr<net::io_context> ioc;
-            std::shared_ptr<net::io_context::strand> strand;
-            std::shared_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> stream;
+            std::shared_ptr<boost::asio::ssl::context> sslc;
+            std::shared_ptr<boost::asio::io_context> ioc;
+            std::shared_ptr<boost::asio::io_context::strand> strand;
+            std::shared_ptr<boost::beast::websocket::stream
+                             <boost::beast::ssl_stream
+                               <boost::asio::ip::tcp::socket>>> stream;
 
             std::queue<std::string> write_queue;
             std::mutex heartex, writex, sequex, pendex;

@@ -17,16 +17,23 @@
 #ifndef HTTP_HPP
 #define HTTP_HPP
 
-#include "dis.hpp"
+#include <string>
 
 namespace discpp
 {
+    namespace http
+    {
+        // using stream = boost::beast::ssl_stream<boost::beast::tcp_stream>;
 
-    using https_stream = beast::ssl_stream<beast::tcp_stream>;
+        template <typename T>
+        auto create_https_stream(T &ctx, std::string url = "discordapp.com");
 
-    https_stream create_https_stream(discpp_context &ctx, std::string url = "discordapp.com");
-    http::response<http::string_body> http_get(https_stream &hstream, std::string url,
-            std::string resource);
-    std::string get_gateway(https_stream &hstream);
-}
+        // beast::http::response<beast::http::string_body>
+        template <typename T>
+        auto http_get(T &hstream, std::string url, std::string resource);
+
+        template <typename T>
+        std::string get_gateway(T &hstream);
+    } // namespace http
+} // namespace discpp
 #endif

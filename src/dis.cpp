@@ -34,20 +34,26 @@
 
 namespace discpp
 {
+    namespace net       = boost::asio;
+    namespace ssl       = boost::asio::ssl;
+    using tcp           = boost::asio::ip::tcp;
 
-    discpp_context::discpp_context() : sslc(ssl::context::tlsv13_client), ioc()
+    namespace beast     = boost::beast;
+    namespace websocket = boost::beast::websocket;
+
+    context::context() : sslc(ssl::context::tlsv13_client), ioc()
     {
         // Safety is key --- let's make sure SSL certs are checked and valid
         sslc.set_default_verify_paths();
         sslc.set_verify_mode(ssl::verify_peer);
     }
 
-    ssl::context &discpp_context::ssl_context()
+    auto &context::ssl_context()
     {
         return sslc;
     }
 
-    net::io_context &discpp_context::io_context()
+    auto &context::io_context()
     {
         return ioc;
     }
@@ -76,89 +82,6 @@ namespace discpp
             boost::log::trivial::severity >= boost::log::trivial::trace
         );
     }
-
-    /*
-    void connection::get_gateway(std::string rest_url)
-    {
-        // This is the only time that we need to use the HTTP interface directly
-
-        // Safety is key --- let's make sure SSL certs are checked and valid
-        sslc = std::make_shared<ssl::context>(ssl::context::tlsv13_client);
-        sslc->set_default_verify_paths();
-        sslc->set_verify_mode(ssl::verify_peer);
-
-        // This IOC will be reassigned when we connect to the gateway, but it is
-        // possible to reuse the context if desired.
-        ioc = std::make_shared<net::io_context>();
-        tcp::resolver resolver{*ioc};
-        beast::ssl_stream<beast::tcp_stream> ssl_stream(*ioc, *sslc);
-
-        // Configure TLS SNI for picky hosts
-        if (! SSL_set_tlsext_host_name(ssl_stream.native_handle(), rest_url.c_str()))
-        {
-            beast::error_code err{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
-            // TODO: this is currently unhandled, we should address it in our
-            // future error handling overhaul
-            throw beast::system_error{err};
-        }
-
-        BOOST_LOG_TRIVIAL(debug) << "Resolving the url " << rest_url << " now...";
-        auto const lookup_res = resolver.resolve(rest_url, "443");
-        BOOST_LOG_TRIVIAL(debug) << "URL resolution successful.";
-
-        beast::get_lowest_layer(ssl_stream).connect(lookup_res);
-
-        BOOST_LOG_TRIVIAL(debug) << "Connected okay... handshaking now...";
-        ssl_stream.handshake(ssl::stream_base::client);
-        BOOST_LOG_TRIVIAL(debug) << "Handshake successful.";
-
-        BOOST_LOG_TRIVIAL(debug) << "Creating http request now...";
-        http::request<http::string_body> request(http::verb::get, "/api/gateway", 11);
-        request.set(http::field::host, rest_url);
-        request.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
-        BOOST_LOG_TRIVIAL(debug) << "Sending request:\n" << request;
-
-        // Get the gateway URL
-        http::write(ssl_stream, request);
-
-        beast::flat_buffer buf;
-        http::response<http::string_body> response;
-        http::read(ssl_stream, buf, response);
-        BOOST_LOG_TRIVIAL(debug) << "Received response:\n" << response;
-
-        // now parse the json string singleton
-        nlohmann::json j;
-        try
-        {
-            j = nlohmann::json::parse(response.body());
-        }
-        catch (nlohmann::json::parse_error& e)
-        {
-            BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received.\n"
-                << "Message contents:\n" << response;
-        }
-        // TODO: check failure
-        // truncate leading "wss://", as the protocl is understood
-        // todo: make this more pretty lol
-        gateway_url = std::string(*j.find("url")).substr(6);
-        BOOST_LOG_TRIVIAL(debug) << "Extracted gateway URL " << gateway_url;
-
-        beast::error_code err;
-        BOOST_LOG_TRIVIAL(debug) << "Shutting down now.";
-        ssl_stream.shutdown(err);
-        // discord doesn't behave according to HTTP spec, so we have to handle
-        // truncated stream errors as if they AREN'T actually errors...
-        if (err == net::error::eof || err == ssl::error::stream_truncated)
-        {
-            // make sure the SSL protocol is followed correctly
-            err = {};
-        }
-        if (err)
-        {
-            throw beast::system_error{err};
-        }
-    }
-    */
 
     void connection::gateway_connect(int version, std::string encoding, bool compression)
     {
