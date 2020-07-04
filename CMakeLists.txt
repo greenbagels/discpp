@@ -4,10 +4,10 @@ project(discpp VERSION 0.1 LANGUAGES CXX)
 
 # Build structure settings
 # add_subdirectory(src build)
-add_library(discpp SHARED src/dis.cpp)
-target_include_directories(discpp PUBLIC src)
+add_library(discpp SHARED src/dis.cpp src/http.cpp)
+target_include_directories(discpp PUBLIC inc)
 file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
-    ${PROJECT_SOURCE_DIR}/src/json.hpp TLS_VERIFY ON)
+    ${PROJECT_SOURCE_DIR}/../inc/json.hpp TLS_VERIFY ON)
 
 # C++ language settings
 set(CMAKE_CXX_STANDARD 14)

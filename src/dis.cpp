@@ -34,6 +34,24 @@
 
 namespace discpp
 {
+
+    discpp_context::discpp_context() : sslc(ssl::context::tlsv13_client), ioc()
+    {
+        // Safety is key --- let's make sure SSL certs are checked and valid
+        sslc.set_default_verify_paths();
+        sslc.set_verify_mode(ssl::verify_peer);
+    }
+
+    ssl::context &discpp_context::ssl_context()
+    {
+        return sslc;
+    }
+
+    net::io_context &discpp_context::io_context()
+    {
+        return ioc;
+    }
+
     connection::connection()
     {
         // Set up boost's trivial logger
@@ -59,6 +77,7 @@ namespace discpp
         );
     }
 
+    /*
     void connection::get_gateway(std::string rest_url)
     {
         // This is the only time that we need to use the HTTP interface directly
@@ -139,6 +158,7 @@ namespace discpp
             throw beast::system_error{err};
         }
     }
+    */
 
     void connection::gateway_connect(int version, std::string encoding, bool compression)
     {

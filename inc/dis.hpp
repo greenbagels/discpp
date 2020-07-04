@@ -275,6 +275,17 @@ namespace discpp
     namespace ssl = net::ssl;
     using tcp = net::ip::tcp;
 
+    class discpp_context
+    {
+        public:
+            discpp_context();
+            ssl::context &ssl_context();
+            net::io_context &io_context();
+        private:
+            ssl::context sslc;
+            net::io_context ioc;
+    };
+
     class connection : public std::enable_shared_from_this<connection>
     {
         // TODO: consider whether these functions actually need to be visible
@@ -286,7 +297,7 @@ namespace discpp
         public:
             connection();
             void init_logger();
-            void get_gateway(std::string rest_url = "discordapp.com");
+            // void get_gateway(std::string rest_url = "discordapp.com");
             void gateway_connect(int ver = 6, std::string encoding = "json",
             bool compression = false);
             void main_loop();
@@ -344,11 +355,11 @@ namespace discpp
             std::queue<std::string> write_queue;
             std::mutex heartex, writex, sequex, pendex;
 
-            // This array is indexed by discord gateway API opcodes. We use it to
-            // avoid using switch statements, which may incur a performance penalty
-            // as the program performs a memory lookup instead of using a jump table.
-            // For elegance, we keep it this way for now. Let's look into the performance
-            // implications at a later time.
+            // This array is indexed by discord gateway API opcodes. We use it
+            // to avoid using switch statements, which may incur a performance
+            // penalty as the program performs a memory lookup instead of using
+            // a jump table. For elegance, we keep it this way for now. Let's
+            // look into the performance implications at a later time.
 
             std::array<std::function<void(nlohmann::json)>, 12> switchboard =
             {
