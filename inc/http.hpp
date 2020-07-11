@@ -23,17 +23,21 @@ namespace discpp
 {
     namespace http
     {
-        // using stream = boost::beast::ssl_stream<boost::beast::tcp_stream>;
+        // Example SyncReadStream:
+        // boost::beast::ssl_stream<boost::beast::tcp_stream>;
+        template <class SyncReadStream, class Context>
+        SyncReadStream create_https_stream(Context &ctx, std::string url, std::string port = "443");
 
-        template <typename T>
-        auto create_https_stream(T &ctx, std::string url = "discordapp.com");
+        // Example response:
+        // boost::beast::http::response<beast::http::string_body>
+        template <class Context>
+        auto http_get(Context &ctx, std::string url, std::string resource);
 
-        // beast::http::response<beast::http::string_body>
-        template <typename T>
-        auto http_get(T &hstream, std::string url, std::string resource);
-
-        template <typename T>
-        std::string get_gateway(T &hstream);
+        template <class Context>
+        std::string get_gateway(Context &ctx);
     } // namespace http
 } // namespace discpp
+
+#include "http_impl.hpp"
+
 #endif

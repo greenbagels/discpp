@@ -272,8 +272,8 @@ namespace discpp
     {
         public:
             context();
-            auto &ssl_context();
-            auto &io_context();
+            boost::asio::ssl::context &ssl_context();
+            boost::asio::io_context &io_context();
         private:
             boost::asio::ssl::context sslc;
             boost::asio::io_context ioc;
@@ -290,9 +290,10 @@ namespace discpp
         public:
             connection();
             void init_logger();
-            void gateway_connect(int ver = 6, std::string encoding = "json",
-            bool compression = false);
+            void gateway_connect(std::string gateway_url, int ver = 6,
+                    std::string encoding = "json", bool compression = false);
             void main_loop();
+            context &get_context();
 
         private:
             void on_read(boost::beast::error_code, std::size_t);
@@ -337,14 +338,14 @@ namespace discpp
             std::thread hb_thread;
             std::atomic_bool abort_hb;
             std::atomic_bool keep_going;
-            std::shared_ptr<boost::beast::flat_buffer> read_buffer;
+            std::unique_ptr<boost::beast::flat_buffer> read_buffer;
 
-            std::shared_ptr<boost::asio::ssl::context> sslc;
-            std::shared_ptr<boost::asio::io_context> ioc;
-            std::shared_ptr<boost::asio::io_context::strand> strand;
-            std::shared_ptr<boost::beast::websocket::stream
-                             <boost::beast::ssl_stream
-                               <boost::asio::ip::tcp::socket>>> stream;
+            // std::shared_ptr<boost::asio::ssl::context> sslc;
+            // std::shared_ptr<boost::asio::io_context> ioc;
+            context discpp_context;
+            boost::asio::io_context::strand strand;
+            std::unique_ptr<boost::beast::websocket::stream<boost::beast::ssl_stream
+                               <boost::beast::tcp_stream>>> gateway_stream;
 
             std::queue<std::string> write_queue;
             std::mutex heartex, writex, sequex, pendex;

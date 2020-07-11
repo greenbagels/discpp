@@ -16,21 +16,20 @@
 
 #include "http.hpp"
 
-#include <json.hpp>
-
 // Required by boost::beast for async io
 #include <boost/asio.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
-// For html
+// For html/websockets
 // NOTE: needs boost >=1.68 for beast+ssl
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
+#include <boost/beast/websocket/ssl.hpp>
 
 namespace discpp
 {
-    namespace http
+    namespace websocket
     {
-    } // namespace http
+    } // namespace websocket
 } // namespace discpp

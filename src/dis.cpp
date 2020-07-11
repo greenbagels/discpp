@@ -16,7 +16,8 @@
 
 // Class declarations
 #include "dis.hpp"
-
+#include "http.hpp"
+#include "ws.hpp"
 // boost::log
 #define BOOST_LOG_DYN_LINK 1
 #include <boost/log/core.hpp>
@@ -36,10 +37,8 @@ namespace discpp
 {
     namespace net       = boost::asio;
     namespace ssl       = boost::asio::ssl;
-    using tcp           = boost::asio::ip::tcp;
 
     namespace beast     = boost::beast;
-    namespace websocket = boost::beast::websocket;
 
     context::context() : sslc(ssl::context::tlsv13_client), ioc()
     {
@@ -48,17 +47,17 @@ namespace discpp
         sslc.set_verify_mode(ssl::verify_peer);
     }
 
-    auto &context::ssl_context()
+    boost::asio::ssl::context &context::ssl_context()
     {
         return sslc;
     }
 
-    auto &context::io_context()
+    boost::asio::io_context &context::io_context()
     {
         return ioc;
     }
 
-    connection::connection()
+    connection::connection() : strand(discpp_context.io_context())
     {
         // Set up boost's trivial logger
         init_logger();
@@ -83,39 +82,21 @@ namespace discpp
         );
     }
 
-    void connection::gateway_connect(int version, std::string encoding, bool compression)
+    void connection::gateway_connect(std::string gateway_url, int version,
+            std::string encoding, bool compression)
     {
-        // I said earlier that we only do the HTTP stuff once...
-        // except we kind of reuse the same general concepts for websocket (being an
-        // upgraded http connection, after all)
+        using http_stream = boost::beast::ssl_stream<boost::beast::tcp_stream>;
+        using ws_stream   = boost::beast::websocket::stream<http_stream>;
 
-        // Again, secure our websocket connection
-        sslc = std::make_shared<ssl::context>(ssl::context::tlsv13_client);
-        sslc->set_default_verify_paths();
-        sslc->set_verify_mode(ssl::verify_peer);
-
-        // We're going to keep this io_context during the entire lifetime of the
-        // session.
-        ioc = std::make_shared<net::io_context>();
-        strand = std::make_shared<net::io_context::strand>(*ioc);
-        tcp::resolver resolver{*ioc};
-        stream = std::make_shared<websocket::stream<beast::ssl_stream<tcp::socket>>>(*ioc, *sslc);
-        BOOST_LOG_TRIVIAL(debug) << "Resolving the url " << gateway_url << " now...";
-        auto const results = resolver.resolve(gateway_url, "443");
-
-        BOOST_LOG_TRIVIAL(debug) << "Connecting to socket now...";
-        auto cxn = net::connect(beast::get_lowest_layer(*stream), results);
-
-        std::string url = gateway_url + ':' + std::to_string(cxn.port());
+        std::string port("443");
         std::string ext = "/?v=" + std::to_string(version) + "&encoding=" + encoding;
         if (compression == true)
         {
             ext += "&compress=zlib-stream";
         }
-        BOOST_LOG_TRIVIAL(debug) << "Performing ssl handshake...";
-        stream->next_layer().handshake(ssl::stream_base::client);
-        BOOST_LOG_TRIVIAL(debug) << "Upgrading to websocket connection at " << url + ext;
-        stream->handshake(url, ext);
+
+        gateway_stream = std::make_unique<ws_stream>
+            (websocket::create_ws_stream(discpp_context, gateway_url, port, ext));
     }
 
     void connection::main_loop()
@@ -131,20 +112,26 @@ namespace discpp
             // the run call will block until the socket is busy, so we don't
             // have to worry about spinning!
             BOOST_LOG_TRIVIAL(debug) << "Running the event loop";
-            ioc->run();
-            ioc->reset();
+            // TODO: consider using a work guard or whatever asio recommends
+            discpp_context.io_context().run();
+            discpp_context.io_context().reset();
         }
+    }
+
+    context &connection::get_context()
+    {
+        return discpp_context;
     }
 
     void connection::start_reading()
     {
         BOOST_LOG_TRIVIAL(debug) << "Read loop started.";
-        if (!strand->running_in_this_thread())
+        if (!strand.running_in_this_thread())
         {
             BOOST_LOG_TRIVIAL(debug) << "Read handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand, beast::bind_front_handler(&connection::start_reading, shared_from_this()));
+            net::post(strand, beast::bind_front_handler(&connection::start_reading, shared_from_this()));
             return;
         }
         BOOST_LOG_TRIVIAL(debug) << "We are in the strand! Continuing with reads...";
@@ -153,8 +140,8 @@ namespace discpp
         // and then calling async_read again.
         // TODO: change hard coded infinite loop to check some atomic bool
         BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
-        read_buffer = std::make_shared<beast::flat_buffer>();
-        stream->async_read(*read_buffer, beast::bind_front_handler(
+        read_buffer = std::make_unique<beast::flat_buffer>();
+        gateway_stream->async_read(*read_buffer, beast::bind_front_handler(
                         &connection::on_read, shared_from_this()));
     }
 
@@ -170,12 +157,12 @@ namespace discpp
             return;
         }
 
-        if (!strand->running_in_this_thread())
+        if (!strand.running_in_this_thread())
         {
             BOOST_LOG_TRIVIAL(debug) << "Read handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand, beast::bind_front_handler(&connection::on_read, shared_from_this(), ec, bytes_written));
+            net::post(strand, beast::bind_front_handler(&connection::on_read, shared_from_this(), ec, bytes_written));
             return;
         }
 
@@ -210,9 +197,9 @@ namespace discpp
         // Queue another read! We want to reset the buffer, but beast doesn't
         // currently (1.73) support reusing asio dynamic buffers. So we'll just
         // keep making new ones for now (letting the destructor free the memory)
-        read_buffer = std::make_shared<beast::flat_buffer>();
+        read_buffer = std::make_unique<beast::flat_buffer>();
         BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
-        stream->async_read(*read_buffer, beast::bind_front_handler(
+        gateway_stream->async_read(*read_buffer, beast::bind_front_handler(
                     &connection::on_read, shared_from_this()));
     }
 
@@ -221,7 +208,7 @@ namespace discpp
         BOOST_LOG_TRIVIAL(debug) << "Called start_writing()...";
         while (keep_going)
         {
-            if (strand->running_in_this_thread())
+            if (strand.running_in_this_thread())
             {
                 BOOST_LOG_TRIVIAL(debug) << "Strand is running in the waiting thread!";
             }
@@ -257,12 +244,12 @@ namespace discpp
             return;
         }
 
-        if (!strand->running_in_this_thread())
+        if (!strand.running_in_this_thread())
         {
             BOOST_LOG_TRIVIAL(debug) << "Write handler not running in the strand..."
                 << " Posting to the strand now.";
             // get on the strand to avoid race conditions
-            net::post(*strand,
+            net::post(strand,
                 beast::bind_front_handler(&connection::on_write, shared_from_this(), ec, bytes_written));
             return;
         }
@@ -286,7 +273,7 @@ namespace discpp
         }
         // Handle the next write
         BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << write_queue.front();
-        stream->async_write(net::buffer(write_queue.front()),
+        gateway_stream->async_write(net::buffer(write_queue.front()),
                 beast::bind_front_handler(&connection::on_write, shared_from_this()));
         BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
         write_queue.pop();

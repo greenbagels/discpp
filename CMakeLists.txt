@@ -4,7 +4,7 @@ project(discpp VERSION 0.1 LANGUAGES CXX)
 
 # Build structure settings
 # add_subdirectory(src build)
-add_library(discpp SHARED src/dis.cpp src/http.cpp)
+add_library(discpp SHARED src/ws.cpp src/dis.cpp)
 target_include_directories(discpp PUBLIC inc)
 file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
     ${PROJECT_SOURCE_DIR}/../inc/json.hpp TLS_VERIFY ON)
