@@ -2,16 +2,16 @@ cmake_minimum_required(VERSION 3.12)
 
 project(discpp VERSION 0.1 LANGUAGES CXX)
 
-# Build structure settings
-# add_subdirectory(src build)
-add_library(discpp SHARED src/ws.cpp src/dis.cpp)
-target_include_directories(discpp PUBLIC inc)
-file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
-    ${PROJECT_SOURCE_DIR}/../inc/json.hpp TLS_VERIFY ON)
-
 # C++ language settings
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Build structure settings
+# add_subdirectory(src build)
+add_library(discpp SHARED src/ws.cpp src/dis.cpp src/gateway.cpp)
+target_include_directories(discpp PUBLIC inc)
+file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
+    ${PROJECT_SOURCE_DIR}/../inc/json.hpp TLS_VERIFY ON)
 
 # First, we set global error flags that should work with everything
 target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror -Wfatal-errors)

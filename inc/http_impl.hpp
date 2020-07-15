@@ -1,4 +1,11 @@
-/*  This file is part of discpp.
+/*! \file http_impl.hpp
+ *  \brief http template implementation header
+ *
+ *  This file includes implementations of templated functions in the http
+ *  namespace as to keep them visible to projects built against the library.
+ */
+
+/* This file is part of discpp.
  *
  *  discpp is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

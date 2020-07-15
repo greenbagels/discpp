@@ -1,3 +1,7 @@
+/*! \file http.hpp
+ *  \brief http functionality header
+ */
+
 /*  This file is part of discpp.
  *
  *  discpp is free software: you can redistribute it and/or modify

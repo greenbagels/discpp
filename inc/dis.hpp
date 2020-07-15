@@ -40,10 +40,14 @@
 
 namespace discpp
 {
+    /*! \namespace discpp
+     *  \brief Global library namespace
+     */
     namespace detail
     {
-        // TODO: change snowflake to template, maybe on guild, and shove
-        //       everything into guild maybe
+        /*! \namespace detail
+         *  \brief Various data structures useful for tracking state
+         */
         struct user_
         {
             std::string id;
@@ -270,6 +274,9 @@ namespace discpp
 
     class context
     {
+        /*! \class context
+         *  \brief Discord API connection context class
+         */
         public:
             context();
             boost::asio::ssl::context &ssl_context();
@@ -277,102 +284,6 @@ namespace discpp
         private:
             boost::asio::ssl::context sslc;
             boost::asio::io_context ioc;
-    };
-
-    class connection : public std::enable_shared_from_this<connection>
-    {
-        // TODO: consider whether these functions actually need to be visible
-        // to the library end-user, or whether we can hide them in a detail
-        // implementation or added abstraction layer. For instance, we can try
-        // to implement one-class-one-purpose by having a class shimming the
-        // API functionality with the boost::asio/beast implementation details.
-
-        public:
-            connection();
-            void init_logger();
-            void gateway_connect(std::string gateway_url, int ver = 6,
-                    std::string encoding = "json", bool compression = false);
-            void main_loop();
-            context &get_context();
-
-        private:
-            void on_read(boost::beast::error_code, std::size_t);
-            void on_write(boost::beast::error_code, std::size_t);
-
-            void start_reading();
-            void start_writing();
-
-            void update_write_queue(std::string message);
-
-            void gw_dispatch(nlohmann::json);
-            void gw_heartbeat(nlohmann::json);
-            void gw_identify(nlohmann::json);
-            void gw_presence(nlohmann::json);
-            void gw_voice_state(nlohmann::json);
-            void gw_resume(nlohmann::json);
-            void gw_reconnect(nlohmann::json);
-            void gw_req_guild(nlohmann::json);
-            void gw_invalid(nlohmann::json);
-            void gw_hello(nlohmann::json);
-            void gw_heartbeat_ack(nlohmann::json);
-
-            void heartbeat_loop();
-
-            void event_ready(nlohmann::json);
-            void event_guild_create(nlohmann::json);
-
-            void parse_channel(detail::channel&, nlohmann::json&);
-
-            std::atomic_bool heartbeat_ack, pending_write;
-            std::condition_variable cv_wq_empty, cv_pending_write;
-
-            // Used for resuming connections and replaying missed data
-            int seq_num;
-
-            std::array<int, 2> shard;
-            std::vector<detail::guild> guilds;
-
-            std::string gateway_url;
-            std::string session_id;
-            std::size_t heartbeat_interval;
-            std::thread hb_thread;
-            std::atomic_bool abort_hb;
-            std::atomic_bool keep_going;
-            std::unique_ptr<boost::beast::flat_buffer> read_buffer;
-
-            // std::shared_ptr<boost::asio::ssl::context> sslc;
-            // std::shared_ptr<boost::asio::io_context> ioc;
-            context discpp_context;
-            boost::asio::io_context::strand strand;
-            std::unique_ptr<boost::beast::websocket::stream<boost::beast::ssl_stream
-                               <boost::beast::tcp_stream>>> gateway_stream;
-
-            std::queue<std::string> write_queue;
-            std::mutex heartex, writex, sequex, pendex;
-
-            // This array is indexed by discord gateway API opcodes. We use it
-            // to avoid using switch statements, which may incur a performance
-            // penalty as the program performs a memory lookup instead of using
-            // a jump table. For elegance, we keep it this way for now. Let's
-            // look into the performance implications at a later time.
-
-            std::array<std::function<void(nlohmann::json)>, 12> switchboard =
-            {
-                [this](nlohmann::json j) { shared_from_this() -> gw_dispatch(j);      },
-                [this](nlohmann::json j) { shared_from_this() -> gw_heartbeat(j);     },
-                [this](nlohmann::json j) { shared_from_this() -> gw_identify(j);      },
-                [this](nlohmann::json j) { shared_from_this() -> gw_presence(j);      },
-                [this](nlohmann::json j) { shared_from_this() -> gw_voice_state(j);   },
-                // The opcode 5 is not currently used in the API. Let's suppress warnings
-                // made by the compiler about the unused parameter.
-                [    ](nlohmann::json j) { boost::ignore_unused(j);                   },
-                [this](nlohmann::json j) { shared_from_this() -> gw_resume(j);        },
-                [this](nlohmann::json j) { shared_from_this() -> gw_reconnect(j);     },
-                [this](nlohmann::json j) { shared_from_this() -> gw_req_guild(j);     },
-                [this](nlohmann::json j) { shared_from_this() -> gw_invalid(j);       },
-                [this](nlohmann::json j) { shared_from_this() -> gw_hello(j);         },
-                [this](nlohmann::json j) { shared_from_this() -> gw_heartbeat_ack(j); }
-            };
     };
 
 }
