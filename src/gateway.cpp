@@ -44,37 +44,13 @@ namespace discpp
         namespace net       = boost::asio;
         namespace ssl       = boost::asio::ssl;
         namespace beast     = boost::beast;
-        /*
-
-        connection connect(context &ctx, std::string gateway_url, int version,
-                                       std::string encoding, bool compression)
-        {
-            // using http_stream = boost::beast::ssl_stream<boost::beast::tcp_stream>;
-            // using ws_stream   = boost::beast::websocket::stream<http_stream>;
-
-            std::string port("443");
-            std::string ext = "/?v=" + std::to_string(version) + "&encoding=" + encoding;
-            if (compression == true)
-            {
-                ext += "&compress=zlib-stream";
-            }
-
-            // ws_stream gateway_stream =
-            //    websocket::create_ws_stream(ctx, gateway_url, port, ext);
-
-            return connection(ctx, websocket::create_ws_stream(ctx, gateway_url, port, ext));
-        }
-        */
 
         connection::connection(context &ctx, std::string gateway_url, int version, std::string encoding, bool use_compression)
-            : discpp_context(ctx), strand(discpp_context.io_context()),
-            gateway_stream(websocket::create_ws_stream
-            (
-                                                                 discpp_context,
-                                                                    gateway_url,
-                                                                          "443",
-            "/?v=" + std::to_string(version) + "&encoding=" + encoding + (use_compression ? "&compress=zlib-stream" : "")
-            ))
+            : discpp_context(ctx), strand(discpp_context.io_context()), gateway_stream(websocket::create_ws_stream(
+                                                                                                                   discpp_context,
+                                                                                                                      gateway_url,
+                                                                                                                            "443",
+                    "/?v=" + std::to_string(version) + "&encoding=" + encoding + (use_compression ? "&compress=zlib-stream" : "")))
         {
             // Set up boost's trivial logger
             init_logger();
@@ -279,6 +255,34 @@ namespace discpp
             write_queue.pop();
         }
 
+        void connection::event_message_create(nlohmann::json data)
+        {
+            std::string id, channel_id, content;
+
+            if (data.find("id") != data.end())
+            {
+                id = *data.find("id");
+            }
+            if (data.find("channel_id") != data.end())
+            {
+                channel_id = *data.find("channel_id");
+            }
+            if (data.find("content") != data.end())
+            {
+                content = *data.find("content");
+            }
+
+            if (content.find("test") != std::string::npos)
+            {
+                nlohmann::json test_response =
+                {
+                    {"content", "Success!"},
+                    {"tts", false}
+                };
+
+                http::http_post(discpp_context, "discord.com", "/api/channels/" + channel_id + "/messages", token, test_response.dump());
+            }
+        }
         void connection::gw_dispatch(nlohmann::json j)
         {
             BOOST_LOG_TRIVIAL(debug) << "Dispatch event received!";
@@ -314,6 +318,10 @@ namespace discpp
                 if (event_name == "GUILD_CREATE")
                 {
                     event_guild_create(data);
+                }
+                if (event_name == "MESSAGE_CREATE")
+                {
+                    event_message_create(data);
                 }
             }
             catch (std::exception& e)
@@ -390,6 +398,7 @@ namespace discpp
             std::ifstream token_stream("token");
             std::stringstream ss;
             ss << token_stream.rdbuf();
+            token = boost::trim_right_copy(ss.str());
 
             try
             {
@@ -399,7 +408,7 @@ namespace discpp
                     nlohmann::json response =
                     {
                         {"op", 2},
-                        {"d", {{"token", boost::trim_right_copy(ss.str()).c_str()},
+                        {"d", {{"token", token.c_str()},
                                {"properties", {{"$os", "linux"},
                                                {"$browser", "discpp 0.01"},
                                                {"$device", "discpp 0.01"}
@@ -419,7 +428,7 @@ namespace discpp
                     nlohmann::json response =
                     {
                         {"op", 6},
-                        {"d", {{"token", ss.str().c_str()},
+                        {"d", {{"token", token.c_str()},
                                {"session_id", session_id.c_str()},
                                {"seq", seq_num.load()}
                               }

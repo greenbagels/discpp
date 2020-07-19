@@ -65,8 +65,6 @@ namespace discpp
                 connection(context &ctx, std::string gateway_url, int version = 6, std::string encoding = "json", bool use_compression = false);
                 // connection(connection &&) = default;
                 void init_logger();
-                void gateway_connect(std::string gateway_url, int ver = 6,
-                        std::string encoding = "json", bool compression = false);
                 void main_loop();
                 context &get_context();
 
@@ -95,6 +93,7 @@ namespace discpp
 
                 void event_ready(nlohmann::json);
                 void event_guild_create(nlohmann::json);
+                void event_message_create(nlohmann::json data);
 
                 void parse_channel(detail::channel&, nlohmann::json&);
 
@@ -146,6 +145,8 @@ namespace discpp
                 std::mutex writex;
                 /*! Prevents race conditions on #pending_write */
                 std::mutex pendex;
+                /*! This is a TEMPORARY member of this class */
+                std::string token;
 
                 /*!
                  * This array is indexed by discord gateway API opcodes. We use it
@@ -174,8 +175,6 @@ namespace discpp
                 };
         };
 
-        // connection connect(context &ctx, std::string gateway_url, int version,
-        //                              std::string encoding, bool compression);
     } // namespace gateway
 } // namespace discpp
 

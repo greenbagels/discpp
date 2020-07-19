@@ -35,7 +35,10 @@ namespace discpp
         // Example response:
         // boost::beast::http::response<beast::http::string_body>
         template <class Context>
-        auto http_get(Context &ctx, std::string url, std::string resource);
+        auto http_get(Context &ctx, std::string url, std::string resource, std::string token);
+
+        template <class Context>
+        auto http_post(Context &ctx, std::string url, std::string resource, std::string token, std::string body);
 
         template <class Context>
         std::string get_gateway(Context &ctx);
