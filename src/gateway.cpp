@@ -14,11 +14,9 @@
  *  along with discpp. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "dis.hpp"
-#include "gateway.hpp"
-
 // Class declarations
 #include "dis.hpp"
+#include "gateway.hpp"
 #include "http.hpp"
 #include "ws.hpp"
 // boost::log
@@ -28,6 +26,8 @@
 #include <boost/log/expressions.hpp>
 // boost::string_algos
 #include <boost/algorithm/string.hpp>
+// pipes
+#include <cstdio>
 // nlohmann::json
 #include "json.hpp"
 // for regular io
@@ -155,6 +155,10 @@ namespace discpp
                 std::terminate();
             }
             int op = *j.find("op");
+
+            // For now, we handle all of the connection-critical functionality in-house.
+            // All other messages are passed through for the end-user to handle.
+
             // run the appropriate function in serial for now; we can switch to a
             // parallel model later, if the need justifies the added complexity and
             // overhead from spawning threads.
@@ -170,6 +174,7 @@ namespace discpp
             {
                 BOOST_LOG_TRIVIAL(error) << e.what();
             }
+
             // Queue another read! We want to reset the buffer, but beast doesn't
             // currently (1.73) support reusing asio dynamic buffers. So we'll just
             // keep making new ones for now (letting the destructor free the memory)
@@ -272,17 +277,46 @@ namespace discpp
                 content = *data.find("content");
             }
 
-            if (content.find("test") != std::string::npos)
+            if (content.find("!info") == 0)
             {
+                // uname -rsv gives us current OS info
+                // uptime -p gives us the current uptime
+                std::array<char, 32> buf;
+                std::string uname, uptime;
+                std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("uname -rsv", "r"), pclose);
+
+                if (!pipe)
+                {
+                    throw std::runtime_error("popen() failed!");
+                }
+                while (fgets(buf.data(), buf.size(), pipe.get()) != nullptr)
+                {
+                    uname += buf.data();
+                }
+
+                buf.fill(0);
+                pipe = std::unique_ptr<FILE, decltype(&pclose)>(popen("uptime -p", "r"), pclose);
+
+                if (!pipe)
+                {
+                    throw std::runtime_error("popen() failed!");
+                }
+                while (fgets(buf.data(), buf.size(), pipe.get()) != nullptr)
+                {
+                    uptime += buf.data();
+                }
+
                 nlohmann::json test_response =
                 {
-                    {"content", "Success!"},
+                    {"content", "**System information:**\n" + uname + uptime},
                     {"tts", false}
                 };
 
-                http::http_post(discpp_context, "discord.com", "/api/channels/" + channel_id + "/messages", token, test_response.dump());
+                http::http_post(discpp_context, "discord.com", "/api/channels/" +
+                        channel_id + "/messages", token, test_response.dump());
             }
         }
+
         void connection::gw_dispatch(nlohmann::json j)
         {
             BOOST_LOG_TRIVIAL(debug) << "Dispatch event received!";
@@ -418,7 +452,7 @@ namespace discpp
                         }
                     };
                     BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
-                    update_write_queue(response.dump());
+                    update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
                     BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
                 }
 
@@ -435,7 +469,7 @@ namespace discpp
                         }
                     };
                     BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
-                    update_write_queue(response.dump());
+                    update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
                     BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
                 }
             }
@@ -445,15 +479,18 @@ namespace discpp
             }
         }
 
-        void connection::update_write_queue(std::string message)
+        template <class Message, class Mutex, class Queue>
+        void connection::update_msg_queue(Message message, Mutex &queue_mutex, Queue &msg_queue, std::condition_variable &cvar)
         {
-            BOOST_LOG_TRIVIAL(debug) << "Updating the write queue!";
+            static_assert(std::is_same<Message, typename Queue::value_type>::value,
+                    "Cannot push a message onto a queue of differing underlying type");
+            // BOOST_LOG_TRIVIAL(debug) << "Updating the write queue!";
             {
-                std::lock_guard<std::mutex> guard(writex);
-                BOOST_LOG_TRIVIAL(debug) << "update_write_queue acquired lock! Pushing now...";
-                write_queue.push(message);
+                std::lock_guard<std::mutex> guard(queue_mutex);
+                BOOST_LOG_TRIVIAL(debug) << "update_msg_queue acquired lock! Pushing onto SOME queue now...";
+                msg_queue.push(message);
             }
-            cv_wq_empty.notify_all();
+            cvar.notify_all();
         }
 
         void connection::gw_heartbeat_ack(nlohmann::json j)
@@ -488,7 +525,7 @@ namespace discpp
                 response["d"] = "null";
                 BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
 
-                update_write_queue(response.dump());
+                update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
 
                 BOOST_LOG_TRIVIAL(debug) << "Putting heartbeat thread to sleep!";
                 // TODO: switch to async_timer

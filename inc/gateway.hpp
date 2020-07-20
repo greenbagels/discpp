@@ -18,6 +18,7 @@
 #define GATEWAY_HPP
 
 #include <array>
+#include <condition_variable>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -75,7 +76,8 @@ namespace discpp
                 void start_reading();
                 void start_writing();
 
-                void update_write_queue(std::string message);
+                template <class Message, class Mutex, class Queue>
+                void update_msg_queue(Message message, Mutex &queue_mutex, Queue &msg_queue, std::condition_variable &cvar);
 
                 void gw_dispatch(nlohmann::json);
                 void gw_heartbeat(nlohmann::json);
@@ -147,6 +149,8 @@ namespace discpp
                 std::mutex pendex;
                 /*! This is a TEMPORARY member of this class */
                 std::string token;
+                /*! Stores trigger functions */
+                // std::vector<trigger::trigger_function> triggers;
 
                 /*!
                  * This array is indexed by discord gateway API opcodes. We use it
