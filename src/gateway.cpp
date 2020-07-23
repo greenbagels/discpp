@@ -201,13 +201,11 @@ namespace discpp
                 BOOST_LOG_TRIVIAL(debug) << "No pending writes found!";
                 pending_write = true;
                 pend_guard.unlock();
+
                 BOOST_LOG_TRIVIAL(debug) << "Waiting for the write queue to populate...";
-                std::unique_lock<std::mutex> queue_guard(writex);
-                BOOST_LOG_TRIVIAL(trace) << "Hit cv_wq_empty.wait() in start_writing()...";
                 // This will also block the current strand...
-                cv_wq_empty.wait(queue_guard, [&]{return !write_queue.empty();});
+                write_queue.wait_until_empty();
                 BOOST_LOG_TRIVIAL(debug) << "Write queue is nonempty!";
-                queue_guard.unlock();
                 BOOST_LOG_TRIVIAL(debug) << "Attempting to get on the strand to write...";
                 on_write(beast::error_code(), 0); // initial write call
             }
@@ -236,8 +234,6 @@ namespace discpp
             }
 
             BOOST_LOG_TRIVIAL(debug) << "We are in the strand! Continuing with writes...";
-
-            std::lock_guard<std::mutex> wg(writex);
             BOOST_LOG_TRIVIAL(trace) << "on_write acquired write_queue lock!";
             if (write_queue.empty())
             {
@@ -253,8 +249,10 @@ namespace discpp
                 return;
             }
             // Handle the next write
-            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << write_queue.front();
-            gateway_stream.async_write(net::buffer(write_queue.front()),
+
+            auto msg = write_queue.front();
+            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << msg;
+            gateway_stream.async_write(net::buffer(msg),
                     beast::bind_front_handler(&connection::on_write, shared_from_this()));
             BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
             write_queue.pop();
@@ -452,7 +450,7 @@ namespace discpp
                         }
                     };
                     BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
-                    update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
+                    write_queue.push(response.dump());
                     BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
                 }
 
@@ -469,7 +467,7 @@ namespace discpp
                         }
                     };
                     BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
-                    update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
+                    write_queue.push(response.dump());
                     BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
                 }
             }
@@ -477,20 +475,6 @@ namespace discpp
             {
                 BOOST_LOG_TRIVIAL(error) << e.what();
             }
-        }
-
-        template <class Message, class Mutex, class Queue>
-        void connection::update_msg_queue(Message message, Mutex &queue_mutex, Queue &msg_queue, std::condition_variable &cvar)
-        {
-            static_assert(std::is_same<Message, typename Queue::value_type>::value,
-                    "Cannot push a message onto a queue of differing underlying type");
-            // BOOST_LOG_TRIVIAL(debug) << "Updating the write queue!";
-            {
-                std::lock_guard<std::mutex> guard(queue_mutex);
-                BOOST_LOG_TRIVIAL(debug) << "update_msg_queue acquired lock! Pushing onto SOME queue now...";
-                msg_queue.push(message);
-            }
-            cvar.notify_all();
         }
 
         void connection::gw_heartbeat_ack(nlohmann::json j)
@@ -525,7 +509,7 @@ namespace discpp
                 response["d"] = "null";
                 BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
 
-                update_msg_queue(response.dump(), writex, write_queue, cv_wq_empty);
+                write_queue.push(response.dump());
 
                 BOOST_LOG_TRIVIAL(debug) << "Putting heartbeat thread to sleep!";
                 // TODO: switch to async_timer

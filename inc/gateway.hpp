@@ -39,6 +39,8 @@
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 
+#include "queue.hpp"
+
 
 namespace discpp
 {
@@ -75,9 +77,6 @@ namespace discpp
 
                 void start_reading();
                 void start_writing();
-
-                template <class Message, class Mutex, class Queue>
-                void update_msg_queue(Message message, Mutex &queue_mutex, Queue &msg_queue, std::condition_variable &cvar);
 
                 void gw_dispatch(nlohmann::json);
                 void gw_heartbeat(nlohmann::json);
@@ -142,7 +141,7 @@ namespace discpp
                     <boost::beast::ssl_stream<boost::beast::tcp_stream>> gateway_stream;
 
                 /*! Stores current messages queued for sending via #gateway_stream */
-                std::queue<std::string> write_queue;
+                queue::message_queue<std::string> write_queue;
                 /*! Prevents race conditions on #write_queue */
                 std::mutex writex;
                 /*! Prevents race conditions on #pending_write */
