@@ -6,6 +6,9 @@ project(discpp VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# Linting settings
+set(CMAKE_CXX_CLANG_TIDY clang-tidy -checks=-*,readability-*)
+
 # Build structure settings
 # add_subdirectory(src build)
 add_library(discpp SHARED src/ws.cpp src/dis.cpp src/gateway.cpp)
