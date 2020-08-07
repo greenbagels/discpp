@@ -55,10 +55,6 @@ namespace discpp
             // Set up boost's trivial logger
             init_logger();
 
-            // receiving an ACK is a precondition for all our heartbeats...
-            // except the first!
-            heartbeat_ack = true;
-            abort_hb = false;
             pending_write = false;
             keep_going = true;
         }
@@ -68,6 +64,8 @@ namespace discpp
             // for now, use the default clog output with the trivial logger.
             // by default, if boost::log was built with multithreading enabled,
             // the logger that's used is the thread-safe _mt version
+
+            // TODO: use LOCAL logger instance mayhaps
             boost::log::core::get()->set_filter
             (
                 // TODO: add parameter dictating sink
@@ -99,6 +97,18 @@ namespace discpp
             return discpp_context;
         }
 
+        nlohmann::json connection::pop()
+        {
+            nlohmann::json j;
+            read_queue.pop(j);
+            return j;
+        }
+
+        void connection::push(nlohmann::json j)
+        {
+            write_queue.push(j);
+        }
+
         void connection::start_reading()
         {
             BOOST_LOG_TRIVIAL(debug) << "Read loop started.";
@@ -125,7 +135,7 @@ namespace discpp
         {
             BOOST_LOG_TRIVIAL(debug) << "Read handler executed...";
 
-            if (ec.value())
+            if (static_cast<bool>(ec.value()))
             {
                 // TODO: add in actual error handling
                 BOOST_LOG_TRIVIAL(error) << "Error in on_read(): " << ec.message();
@@ -154,6 +164,10 @@ namespace discpp
                     << "Message contents:\n" << beast::buffers_to_string(read_buffer->data());
                 std::terminate();
             }
+
+            read_queue.push(j);
+
+            /*
             int op = *j.find("op");
 
             // For now, we handle all of the connection-critical functionality in-house.
@@ -178,6 +192,7 @@ namespace discpp
             // Queue another read! We want to reset the buffer, but beast doesn't
             // currently (1.73) support reusing asio dynamic buffers. So we'll just
             // keep making new ones for now (letting the destructor free the memory)
+            */
             read_buffer = std::make_unique<beast::flat_buffer>();
             BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
             gateway_stream.async_read(*read_buffer, beast::bind_front_handler(
@@ -215,7 +230,7 @@ namespace discpp
         {
             BOOST_LOG_TRIVIAL(debug) << "Write handler executed...";
             // Reschedule for the strand
-            if (ec.value())
+            if (static_cast<bool>(ec.value()))
             {
                 // TODO: handle errors gracefully, and more consistently
                 BOOST_LOG_TRIVIAL(error) << "Error in on_write(): " << ec.message();
@@ -250,339 +265,27 @@ namespace discpp
             }
             // Handle the next write
 
-            auto msg = write_queue.front();
-            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << msg;
-            gateway_stream.async_write(net::buffer(msg),
-                    beast::bind_front_handler(&connection::on_write, shared_from_this()));
+            nlohmann::json msg;
             BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
-            write_queue.pop();
+            write_queue.pop(msg);
+            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << msg;
+            gateway_stream.async_write(net::buffer(msg.dump()),
+                    beast::bind_front_handler(&connection::on_write, shared_from_this()));
         }
 
-        void connection::event_message_create(nlohmann::json data)
+        connection& operator<<(connection& cxn, nlohmann::json &j)
         {
-            std::string id, channel_id, content;
-
-            if (data.find("id") != data.end())
-            {
-                id = *data.find("id");
-            }
-            if (data.find("channel_id") != data.end())
-            {
-                channel_id = *data.find("channel_id");
-            }
-            if (data.find("content") != data.end())
-            {
-                content = *data.find("content");
-            }
-
-            if (content.find("!info") == 0)
-            {
-                // uname -rsv gives us current OS info
-                // uptime -p gives us the current uptime
-                std::array<char, 32> buf;
-                std::string uname, uptime;
-                std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("uname -rsv", "r"), pclose);
-
-                if (!pipe)
-                {
-                    throw std::runtime_error("popen() failed!");
-                }
-                while (fgets(buf.data(), buf.size(), pipe.get()) != nullptr)
-                {
-                    uname += buf.data();
-                }
-
-                buf.fill(0);
-                pipe = std::unique_ptr<FILE, decltype(&pclose)>(popen("uptime -p", "r"), pclose);
-
-                if (!pipe)
-                {
-                    throw std::runtime_error("popen() failed!");
-                }
-                while (fgets(buf.data(), buf.size(), pipe.get()) != nullptr)
-                {
-                    uptime += buf.data();
-                }
-
-                nlohmann::json test_response =
-                {
-                    {"content", "**System information:**\n" + uname + uptime},
-                    {"tts", false}
-                };
-
-                http::http_post(discpp_context, "discord.com", "/api/channels/" +
-                        channel_id + "/messages", token, test_response.dump());
-            }
+            // TODO: Exception-safety
+            cxn.push(j);
+            return cxn;
         }
 
-        void connection::gw_dispatch(nlohmann::json j)
+        connection& operator>>(connection& cxn, nlohmann::json &j)
         {
-            BOOST_LOG_TRIVIAL(debug) << "Dispatch event received!";
-            // Parse the sequence number, which, for dispatch events, should exist
-            BOOST_LOG_TRIVIAL(debug) << j.dump();
-            if (j.find("s") != j.end())
-            {
-                seq_num = *j.find("s");
-            }
-            else
-            {
-                throw std::logic_error("Dispatch event missing sequence number!\n");
-            }
-
-            std::string event_name;
-            if (j.find("t") != j.end())
-            {
-                event_name = *j.find("t");
-            }
-            else
-            {
-                throw std::logic_error("Dispatch event missing event name!\n");
-            }
-            // TODO: error check in case j doesn't contain the event data
-            nlohmann::json data = *j.find("d");
-
-            try
-            {
-                if (event_name == "READY")
-                {
-                    event_ready(data);
-                }
-                if (event_name == "GUILD_CREATE")
-                {
-                    event_guild_create(data);
-                }
-                if (event_name == "MESSAGE_CREATE")
-                {
-                    event_message_create(data);
-                }
-            }
-            catch (std::exception& e)
-            {
-                BOOST_LOG_TRIVIAL(error) <<
-                    "Exception occurred in dispatch event handler: " << e.what();
-            }
+            // TODO: Exception-safety
+            j = cxn.pop();
+            return cxn;
         }
 
-        void connection::gw_heartbeat(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_identify(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_presence(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_voice_state(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_resume(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_reconnect(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_req_guild(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_invalid(nlohmann::json j)
-        {
-            boost::ignore_unused(j);
-        }
-
-        void connection::gw_hello(nlohmann::json j)
-        {
-            //opcode 10, hello, so "d" contains another json object
-            nlohmann::json subj = *j.find("d");
-            heartbeat_interval = *subj.find("heartbeat_interval");
-            BOOST_LOG_TRIVIAL(debug) << "Heartbeat interval is " << heartbeat_interval;
-            // now we gotta queue up heartbeats!
-            try
-            {
-                BOOST_LOG_TRIVIAL(debug) << "Starting heartbeat loop thread now!\n";
-                // TODO: handle resume destruction of this thread
-                hb_thread = std::thread(&connection::heartbeat_loop, shared_from_this());
-                // th.detach();
-            } // replace this just like the other try catch
-            catch (std::exception& e)
-            {
-                BOOST_LOG_TRIVIAL(debug) << e.what();
-            }
-
-            // Wait for the heartbeat code to announce that heartbit has changed
-            // std::unique_lock<std::mutex> lock(idex);
-            // cv.wait(lock);
-
-            // TODO: take \n out of the file, since that's technically part of the line
-            std::ifstream token_stream("token");
-            std::stringstream ss;
-            ss << token_stream.rdbuf();
-            token = boost::trim_right_copy(ss.str());
-
-            try
-            {
-                if (session_id.empty())
-                {
-                    BOOST_LOG_TRIVIAL(info) << "Sending an IDENTIFY...";
-                    nlohmann::json response =
-                    {
-                        {"op", 2},
-                        {"d", {{"token", token.c_str()},
-                               {"properties", {{"$os", "linux"},
-                                               {"$browser", "discpp 0.01"},
-                                               {"$device", "discpp 0.01"}
-                                              }
-                               }
-                              }
-                        }
-                    };
-                    BOOST_LOG_TRIVIAL(debug) << "IDENTIFY contains: " << response.dump();
-                    write_queue.push(response.dump());
-                    BOOST_LOG_TRIVIAL(debug) << "Pushed an IDENTIFY onto the queue...";
-                }
-
-                else
-                {
-                    BOOST_LOG_TRIVIAL(info) << "Sending a RESUME...";
-                    nlohmann::json response =
-                    {
-                        {"op", 6},
-                        {"d", {{"token", token.c_str()},
-                               {"session_id", session_id.c_str()},
-                               {"seq", seq_num.load()}
-                              }
-                        }
-                    };
-                    BOOST_LOG_TRIVIAL(debug) << "RESUME contains: " << response.dump();
-                    write_queue.push(response.dump());
-                    BOOST_LOG_TRIVIAL(debug) << "Pushed a RESUME onto the queue...";
-                }
-            }
-            catch (std::exception& e)
-            {
-                BOOST_LOG_TRIVIAL(error) << e.what();
-            }
-        }
-
-        void connection::gw_heartbeat_ack(nlohmann::json j)
-        {
-            BOOST_LOG_TRIVIAL(debug) << "Heartbeat ACK received!";
-            // TODO: check if already 1, because then a mistake happened!
-            heartbeat_ack = 1;
-            boost::ignore_unused(j);
-        }
-
-        void connection::heartbeat_loop()
-        {
-            BOOST_LOG_TRIVIAL(debug) << "Heartbeat loop started";
-            while(true)
-            {
-                if (abort_hb)
-                {
-                    return;
-                }
-                if (!heartbeat_ack)
-                {
-                    BOOST_LOG_TRIVIAL(error) << "Haven't received a heartbeat ACK!";
-                    // TODO: shutdown gracefully, or reconnect
-                    throw std::runtime_error("Possible zombie connection... terminating!");
-                }
-                // this is atomic, and we don't particuarly care about mutex in this fn
-                heartbeat_ack = 0;
-
-                nlohmann::json response;
-                response["op"] = 1;
-                // TODO: allow resuming by sequence number
-                response["d"] = "null";
-                BOOST_LOG_TRIVIAL(debug) << "Pushing a heartbeat message onto the queue";
-
-                write_queue.push(response.dump());
-
-                BOOST_LOG_TRIVIAL(debug) << "Putting heartbeat thread to sleep!";
-                // TODO: switch to async_timer
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_interval));
-            }
-        }
-
-        void connection::event_ready(nlohmann::json data)
-        {
-            BOOST_LOG_TRIVIAL(debug) << "Ready event received!";
-            session_id = std::move(*data.find("session_id"));
-            if (data.find("shard") != data.end())
-            {
-                std::vector<int> v = *data.find("shard");
-                std::copy(v.begin(), v.end(), shard.begin());
-            }
-            if (data.find("guilds") != data.end())
-            {
-                // *data.find("guilds") should be a std::vector of JSON objects
-                for (auto i = data.find("guilds")->begin();
-                        i != data.find("guilds")->end(); i++)
-                {
-                    discpp::detail::guild g;
-                    if (i->find("id") != i->end())
-                    {
-                        g.id = *i->find("id");
-                    }
-                    if (i->find("unavailable") != i->end())
-                    {
-                        g.unavailable = *i->find("unavailable");
-                    }
-                    guilds.push_back(g);
-                }
-            }
-        }
-
-        void connection::event_guild_create(nlohmann::json data)
-        {
-            for (auto g = guilds.begin(); g != guilds.end(); g++)
-            {
-                if (g->id == *data.find("id"))
-                {
-                    // TODO: parse all entries
-                    g->name = *data.find("name");
-                    if (data.find("permissions") != data.end())
-                    {
-                        g->permissions = *data.find("permissions");
-                    }
-                    for (auto i = data.find("channels")->begin();
-                            i != data.find("channels")->end(); i++)
-                    {
-                        detail::channel ch;
-                        parse_channel(ch, *i);
-                        g->channels.push_back(ch);
-                    }
-                }
-            }
-        }
-
-        // TODO: this doesn't need to be coupled to the class really
-        void connection::parse_channel(detail::channel& ch, nlohmann::json& data)
-        {
-            // TODO: finish parsing
-            ch.id = *data.find("id");
-            ch.type = *data.find("type");
-            if (data.find("name") != data.end())
-            {
-                ch.name = *data.find("name");
-            }
-            if (data.find("topic") != data.end() && *data.find("topic") != nullptr)
-            {
-                ch.topic = *data.find("topic");
-            }
-        }
     } // namespace gateway
 } // namespace discpp

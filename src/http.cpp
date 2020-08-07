@@ -14,20 +14,6 @@
  *  along with discpp. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "http.hpp"
-
-#include <json.hpp>
-
-// Required by boost::beast for async io
-#include <boost/asio.hpp>
-#include <boost/asio/ssl/error.hpp>
-#include <boost/asio/ssl/stream.hpp>
-
-// For html
-// NOTE: needs boost >=1.68 for beast+ssl
-#include <boost/beast.hpp>
-#include <boost/beast/ssl.hpp>
-
 namespace discpp
 {
     namespace http
