@@ -20,7 +20,6 @@
 #include <array>
 #include <condition_variable>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,19 +32,24 @@
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
+// For boost::optional
+#include <boost/optional.hpp>
+
 // For html/websockets
 // NOTE: needs boost >=1.68 for beast+ssl
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 
-#include "queue.hpp"
+#include "priority_queue.hpp"
 
 
 namespace discpp
 {
     namespace gateway
     {
+        /*! Each message contains both a payload and a deadline */
+        using message = std::pair<nlohmann::json, boost::optional<std::chrono::time_point<std::chrono::steady_clock>>>;
 
         class connection : public std::enable_shared_from_this<connection>
         {
@@ -71,8 +75,8 @@ namespace discpp
                 void main_loop();
                 context& get_context();
                 // Direct interfaces
-                nlohmann::json pop();
-                void push(nlohmann::json);
+                message pop();
+                void push(message);
 
             private:
                 void on_read(boost::beast::error_code, std::size_t);
@@ -107,9 +111,9 @@ namespace discpp
                     <boost::beast::ssl_stream<boost::beast::tcp_stream>> gateway_stream;
 
                 /*! Stores current messages that have been read via #gateway_stream */
-                queue::message_queue<nlohmann::json> read_queue;
+                queue::priority_message_queue<message> read_queue;
                 /*! Stores current messages queued for sending via #gateway_stream */
-                queue::message_queue<nlohmann::json> write_queue;
+                queue::priority_message_queue<message> write_queue;
                 /*! Prevents race conditions on #write_queue */
                 std::mutex writex;
                 /*! Prevents race conditions on #pending_write */
@@ -118,8 +122,8 @@ namespace discpp
         }; // class connection
 
         // Stream interfaces
-        connection& operator<<(connection&, nlohmann::json&);
-        connection& operator>>(connection&, nlohmann::json&);
+        connection& operator<<(connection&, message&);
+        connection& operator>>(connection&, message&);
     } // namespace gateway
 } // namespace discpp
 

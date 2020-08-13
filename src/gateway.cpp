@@ -97,16 +97,16 @@ namespace discpp
             return discpp_context;
         }
 
-        nlohmann::json connection::pop()
+        message connection::pop()
         {
-            nlohmann::json j;
-            read_queue.pop(j);
-            return j;
+            message msg;
+            read_queue.pop(msg);
+            return msg;
         }
 
-        void connection::push(nlohmann::json j)
+        void connection::push(message msg)
         {
-            write_queue.push(j);
+            write_queue.push(msg);
         }
 
         void connection::start_reading()
@@ -165,34 +165,16 @@ namespace discpp
                 std::terminate();
             }
 
-            read_queue.push(j);
+            // read_queue.push(j);
 
-            /*
+            // We want to keep track of priority of every message, and pass it along
+            // the chain.
             int op = *j.find("op");
 
-            // For now, we handle all of the connection-critical functionality in-house.
-            // All other messages are passed through for the end-user to handle.
-
-            // run the appropriate function in serial for now; we can switch to a
-            // parallel model later, if the need justifies the added complexity and
-            // overhead from spawning threads.
-            try
-            {
-                // Just to avoid painful blocks of switches, we just use a
-                // "switchboard" of lambda expressions indexed by opcode!
-                // TODO: Handle gateway close events
-                switchboard[op](j);
-                BOOST_LOG_TRIVIAL(debug) << "Responded to network input.";
-            } // replace this with actual error handling later
-            catch (std::exception& e)
-            {
-                BOOST_LOG_TRIVIAL(error) << e.what();
-            }
-
+            boost::ignore_unused(op);
             // Queue another read! We want to reset the buffer, but beast doesn't
             // currently (1.73) support reusing asio dynamic buffers. So we'll just
             // keep making new ones for now (letting the destructor free the memory)
-            */
             read_buffer = std::make_unique<beast::flat_buffer>();
             BOOST_LOG_TRIVIAL(debug) << "Calling async_read()...";
             gateway_stream.async_read(*read_buffer, beast::bind_front_handler(
@@ -265,25 +247,25 @@ namespace discpp
             }
             // Handle the next write
 
-            nlohmann::json msg;
+            message msg;
             BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
             write_queue.pop(msg);
-            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << msg;
-            gateway_stream.async_write(net::buffer(msg.dump()),
+            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << std::get<0>(msg);
+            gateway_stream.async_write(net::buffer(std::get<0>(msg).dump()),
                     beast::bind_front_handler(&connection::on_write, shared_from_this()));
         }
 
-        connection& operator<<(connection& cxn, nlohmann::json &j)
+        connection& operator<<(connection& cxn, message &msg)
         {
             // TODO: Exception-safety
-            cxn.push(j);
+            cxn.push(msg);
             return cxn;
         }
 
-        connection& operator>>(connection& cxn, nlohmann::json &j)
+        connection& operator>>(connection& cxn, message &msg)
         {
             // TODO: Exception-safety
-            j = cxn.pop();
+            msg = cxn.pop();
             return cxn;
         }
 

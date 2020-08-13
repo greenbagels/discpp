@@ -30,7 +30,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
-
+#include <boost/core/ignore_unused.hpp>
 // For HTTP
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
@@ -69,6 +69,7 @@ namespace discpp
         template <class Context>
         auto http_get(Context &ctx, std::string url, std::string resource, std::string token)
         {
+            boost::ignore_unused(token);
             namespace bhttp = boost::beast::http;
             using stream    = boost::beast::ssl_stream<boost::beast::tcp_stream>;
 
