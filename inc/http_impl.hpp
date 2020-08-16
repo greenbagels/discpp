@@ -24,7 +24,7 @@
 #ifndef HTTP_IMPL_HPP
 #define HTTP_IMPL_HPP
 
-#include <json.hpp>
+#include <boost/json.hpp>
 
 // Required by boost::beast for async io
 #include <boost/asio.hpp>
@@ -164,26 +164,26 @@ namespace discpp
         template <class Context>
         std::string get_gateway(Context &ctx)
         {
-            using json = nlohmann::json;
+            namespace json = boost::json;
             namespace bhttp = boost::beast::http;
 
             // Connect and GET /api/gateway
             auto response = http_get(ctx, "discordapp.com", "/api/gateway", std::string());
 
             // now parse the JSON "url" key
-            json j;
+            json::value v;
             try
             {
-                j = json::parse(response.body());
+                v = json::parse(response.body());
             }
-            catch (json::parse_error& e)
+            catch (const std::exception& e)
             {
                 //BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received.\n"
                 //    << "Message contents:\n" << response;
             }
             // truncate leading "wss://", as the protocol is understood
-            auto gateway_url = std::string(*j.find("url")).substr(6);
-
+            const int prefix_len = strlen("wss://");
+            auto gateway_url = std::string(v.as_object()["url"].as_string().subview(prefix_len));
             return gateway_url;
         }
     }

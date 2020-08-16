@@ -1,7 +1,8 @@
 # discpp
 
 A C++ API wrapper library for the Discord bot API, aiming to be fast and
-lightweight using modern C++ practices.
+lightweight using modern C++ practices. Whether those aims will be met, no
+one knows :)
 
 *Disclaimer: the library is **not at all** stable. Hopefully a roadmap is going
 to be made soon.*
@@ -11,7 +12,7 @@ to be made soon.*
 The library currently requires C++14, and the following third-party dependencies
 (as well as their transitive dependencies).
 
-- nlohmann/json
+- (not-yet-)boost::json
 - boost::beast >=1.68
 - boost::log
 - cmake (and some build tool like make or ninja)

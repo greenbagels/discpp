@@ -133,9 +133,11 @@ namespace discpp
                 void pop(T& ret)
                 {
                     // Make sure swap can't throw
+                    /*
                     static_assert(std::is_nothrow_move_constructible<T>::value &&
                             std::is_nothrow_move_assignable<T>::value,
                             "Cannot guarantee no-throw swap for deduced message type!");
+                            */
                     // Keep any other threads from racing with us
                     std::lock_guard<std::mutex> g(_mutex); // strong guarantee
 

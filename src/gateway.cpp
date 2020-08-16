@@ -28,8 +28,10 @@
 #include <boost/algorithm/string.hpp>
 // pipes
 #include <cstdio>
+// fixed width integer types
+#include <cstdint>
 // nlohmann::json
-#include "json.hpp"
+#include <boost/json.hpp>
 // for regular io
 #include <iostream>
 #include <fstream>
@@ -153,12 +155,12 @@ namespace discpp
             }
 
             // This will hold our parsed JSON event data from the gateway
-            nlohmann::json j;
+            boost::json::value v;
             try
             {
-                j = nlohmann::json::parse(beast::buffers_to_string(read_buffer->data()));
+                v = boost::json::parse(beast::buffers_to_string(read_buffer->data()));
             }
-            catch(nlohmann::json::parse_error& e)
+            catch(const std::exception& e)
             {
                 BOOST_LOG_TRIVIAL(error) << "Exception " << e.what() << " received.\n"
                     << "Message contents:\n" << beast::buffers_to_string(read_buffer->data());
@@ -169,8 +171,9 @@ namespace discpp
 
             // We want to keep track of priority of every message, and pass it along
             // the chain.
-            int op = *j.find("op");
+            std::int64_t op = v.as_object()["op"].as_int64();
 
+            // TODO: Tag priority and push to read queue
             boost::ignore_unused(op);
             // Queue another read! We want to reset the buffer, but beast doesn't
             // currently (1.73) support reusing asio dynamic buffers. So we'll just
@@ -250,8 +253,9 @@ namespace discpp
             message msg;
             BOOST_LOG_TRIVIAL(debug) << "Popping write_queue...";
             write_queue.pop(msg);
-            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << std::get<0>(msg);
-            gateway_stream.async_write(net::buffer(std::get<0>(msg).dump()),
+            auto msg_sv = boost::json::to_string(std::get<0>(msg));
+            BOOST_LOG_TRIVIAL(debug) << "Sending the following message: " << msg_sv;
+            gateway_stream.async_write(net::buffer(msg_sv.data(), msg_sv.size()),
                     beast::bind_front_handler(&connection::on_write, shared_from_this()));
         }
 

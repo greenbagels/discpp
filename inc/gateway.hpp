@@ -25,7 +25,7 @@
 #include <vector>
 
 // for json
-#include "json.hpp"
+#include <boost/json.hpp>
 
 // Required by boost::beast for async io
 #include <boost/asio.hpp>
@@ -49,7 +49,7 @@ namespace discpp
     namespace gateway
     {
         /*! Each message contains both a payload and a deadline */
-        using message = std::pair<nlohmann::json, boost::optional<std::chrono::time_point<std::chrono::steady_clock>>>;
+        using message = std::pair<boost::json::value, boost::optional<std::chrono::time_point<std::chrono::steady_clock>>>;
 
         class connection : public std::enable_shared_from_this<connection>
         {

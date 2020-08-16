@@ -13,8 +13,6 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy -checks=-*,readability-*)
 # add_subdirectory(src build)
 add_library(discpp SHARED src/ws.cpp src/dis.cpp src/gateway.cpp)
 target_include_directories(discpp PUBLIC inc)
-file(DOWNLOAD https://github.com/nlohmann/json/releases/download/v3.7.3/json.hpp
-    ${PROJECT_SOURCE_DIR}/../inc/json.hpp TLS_VERIFY ON)
 
 # First, we set global error flags that should work with everything
 target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror -Wfatal-errors)
@@ -37,5 +35,5 @@ set(Boost_USE_STATIC_RUNTIME OFF)
 
 find_package(boost_log 1.70 REQUIRED COMPONENTS log)
 
-target_link_libraries(discpp ${Boost_LIBRARIES})
+target_link_libraries(discpp ${Boost_LIBRARIES} boost_json)
 
