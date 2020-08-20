@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Linting settings
 set(CMAKE_CXX_CLANG_TIDY clang-tidy -checks=-*,readability-*)
+# Code editor settings
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build structure settings
 # add_subdirectory(src build)

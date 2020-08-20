@@ -196,7 +196,7 @@ namespace discpp
 
                     // equivalent to wait(unique_lock, predicate) call, but more
                     // clear imo
-                    while (_queue.empty())
+                    while (!_queue.empty())
                     {
                         // remember: the lock is dropped while _cvar waits
                         _cvar.wait(g);
@@ -204,6 +204,15 @@ namespace discpp
                     }
                 }
 
+                void wait_until_nonempty()
+                {
+                    std::unique_lock<std::mutex> g(_mutex);
+
+                    while (_queue.empty())
+                    {
+                        _cvar.wait(g);
+                    }
+                }
             private:
                 /*! Our underlying message queue container */
                 std::priority_queue<T, std::vector<T>, LaterDeadline<T>> _queue;

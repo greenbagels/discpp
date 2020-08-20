@@ -57,6 +57,8 @@ namespace discpp
             // Set up boost's trivial logger
             init_logger();
 
+            BOOST_LOG_TRIVIAL(debug) << "Set up logger!";
+
             pending_write = false;
             keep_going = true;
         }
@@ -154,6 +156,9 @@ namespace discpp
                 return;
             }
 
+            BOOST_LOG_TRIVIAL(debug) << "Message contents:\n"
+                << beast::buffers_to_string(read_buffer->data());
+
             // This will hold our parsed JSON event data from the gateway
             boost::json::value v;
             try
@@ -167,14 +172,42 @@ namespace discpp
                 std::terminate();
             }
 
-            // read_queue.push(j);
-
             // We want to keep track of priority of every message, and pass it along
             // the chain.
+            using namespace std::chrono;
             std::int64_t op = v.as_object()["op"].as_int64();
+            boost::optional<time_point<steady_clock>> deadline;
 
-            // TODO: Tag priority and push to read queue
-            boost::ignore_unused(op);
+            switch (static_cast<opcode>(op))
+            {
+                // So the priority chain looks like this:
+                // RECONNECT >= INVALID > HEARTBEAT >= HEARTBEAT_ACK > *
+                // Let's use "now" for higherst priority, "a little later" for
+                case opcode::reconnect:
+                case opcode::invalid_session:
+                    deadline = steady_clock::now();
+                    break;
+                case opcode::heartbeat:
+                case opcode::heartbeat_ack:
+                    // TODO: parse the interval instead
+                    deadline = steady_clock::now() + 45s;
+                    break;
+                case opcode::dispatch:
+                case opcode::identify:
+                case opcode::presence_update:
+                case opcode::voice_state_update:
+                case opcode::resume:
+                case opcode::request_guild_members:
+                case opcode::hello:
+                    // Leave as optional
+                    break;
+                default:
+                    throw std::runtime_error("Task failed successfully");
+                    break;
+            }
+
+            read_queue.push(std::pair<boost::json::value, boost::optional<time_point<steady_clock>>>(v,deadline));
+
             // Queue another read! We want to reset the buffer, but beast doesn't
             // currently (1.73) support reusing asio dynamic buffers. So we'll just
             // keep making new ones for now (letting the destructor free the memory)
@@ -204,7 +237,7 @@ namespace discpp
 
                 BOOST_LOG_TRIVIAL(debug) << "Waiting for the write queue to populate...";
                 // This will also block the current strand...
-                write_queue.wait_until_empty();
+                write_queue.wait_until_nonempty();
                 BOOST_LOG_TRIVIAL(debug) << "Write queue is nonempty!";
                 BOOST_LOG_TRIVIAL(debug) << "Attempting to get on the strand to write...";
                 on_write(beast::error_code(), 0); // initial write call

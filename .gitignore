@@ -6,8 +6,10 @@ json.hpp
 *.exe
 *.out
 *.log
+*.ninja
 build/*
 CMakeCache.txt
 CMakeFiles/*
 Makefile
+compile_commands.json
 

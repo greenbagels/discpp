@@ -42,14 +42,38 @@
 #include <boost/beast/websocket/ssl.hpp>
 
 #include "priority_queue.hpp"
+#include "dis.hpp"
 
 
 namespace discpp
 {
     namespace gateway
     {
+        enum class opcode
+        {
+                                   //   --------------------
+            // Should the client:  //  | Receive |   Send   |
+                                   //  |--------------------|
+            dispatch = 0,          //  |   Yes   |    No    |
+            heartbeat,             //  |   Yes   |    Yes   |
+            identify,              //  |   No    |    Yes   |
+            presence_update,       //  |   No    |    Yes   |
+            voice_state_update,    //  |   No    |    Yes   |
+            unused,                //  |  UNUSED |  UNUSED  |
+            resume,                //  |   No    |    Yes   |
+            reconnect,             //  |   Yes   |    No    |
+            request_guild_members, //  |   No    |    Yes   |
+            invalid_session,       //  |   Yes   |    No    |
+            hello,                 //  |   Yes   |    No    |
+            heartbeat_ack          //  |   Yes   |    No    |
+                                   //   ---------------------
+        };
+
         /*! Each message contains both a payload and a deadline */
-        using message = std::pair<boost::json::value, boost::optional<std::chrono::time_point<std::chrono::steady_clock>>>;
+        using message = std::pair<
+            boost::json::value,
+            boost::optional<std::chrono::time_point<std::chrono::steady_clock>>
+                >;
 
         class connection : public std::enable_shared_from_this<connection>
         {
@@ -69,7 +93,13 @@ namespace discpp
              */
 
             public:
-                connection(context &ctx, std::string gateway_url, int version = 6, std::string encoding = "json", bool use_compression = false);
+                connection(
+                    context &ctx,
+                    std::string gateway_url,
+                    int version = 6,
+                    std::string encoding = "json",
+                    bool use_compression = false
+                    );
                 // connection(connection &&) = default;
                 static void init_logger();
                 void main_loop();
@@ -77,6 +107,11 @@ namespace discpp
                 // Direct interfaces
                 message pop();
                 void push(message);
+
+                /*! Stores current messages that have been read via #gateway_stream */
+                queue::priority_message_queue<message> read_queue;
+                /*! Stores current messages queued for sending via #gateway_stream */
+                queue::priority_message_queue<message> write_queue;
 
             private:
                 void on_read(boost::beast::error_code, std::size_t);
@@ -110,10 +145,6 @@ namespace discpp
                 boost::beast::websocket::stream
                     <boost::beast::ssl_stream<boost::beast::tcp_stream>> gateway_stream;
 
-                /*! Stores current messages that have been read via #gateway_stream */
-                queue::priority_message_queue<message> read_queue;
-                /*! Stores current messages queued for sending via #gateway_stream */
-                queue::priority_message_queue<message> write_queue;
                 /*! Prevents race conditions on #write_queue */
                 std::mutex writex;
                 /*! Prevents race conditions on #pending_write */
