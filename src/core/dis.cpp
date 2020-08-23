@@ -14,22 +14,25 @@
  *  along with discpp. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "http.hpp"
-
-// Required by boost::beast for async io
-#include <boost/asio.hpp>
-#include <boost/asio/ssl/error.hpp>
-#include <boost/asio/ssl/stream.hpp>
-
-// For html/websockets
-// NOTE: needs boost >=1.68 for beast+ssl
-#include <boost/beast.hpp>
-#include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket/ssl.hpp>
+// Class declarations
+#include "core/dis.hpp"
 
 namespace discpp
 {
-    namespace websocket
+    context::context() : sslc(boost::asio::ssl::context::tlsv13_client), ioc()
     {
-    } // namespace websocket
-} // namespace discpp
+        // Safety is key --- let's make sure SSL certs are checked and valid
+        sslc.set_default_verify_paths();
+        sslc.set_verify_mode(boost::asio::ssl::verify_peer);
+    }
+
+    boost::asio::ssl::context &context::ssl_context()
+    {
+        return sslc;
+    }
+
+    boost::asio::io_context &context::io_context()
+    {
+        return ioc;
+    }
+}

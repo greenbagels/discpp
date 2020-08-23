@@ -13,8 +13,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build structure settings
 # add_subdirectory(src build)
-add_library(discpp SHARED src/ws.cpp src/dis.cpp src/gateway.cpp)
-target_include_directories(discpp PUBLIC inc)
+add_library(discpp SHARED src/core/dis.cpp
+                          src/core/gateway.cpp
+                          src/core/ws.cpp)
+
+target_include_directories(discpp PUBLIC include)
 
 # First, we set global error flags that should work with everything
 target_compile_options(discpp PRIVATE -Wall -Wextra -Wpedantic -Werror -Wfatal-errors)

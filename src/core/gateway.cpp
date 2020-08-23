@@ -15,10 +15,10 @@
  */
 
 // Class declarations
-#include "dis.hpp"
-#include "gateway.hpp"
-#include "http.hpp"
-#include "ws.hpp"
+#include "core/dis.hpp"
+#include "core/gateway.hpp"
+#include "net/http.hpp"
+#include "net/ws.hpp"
 // boost::log
 #define BOOST_LOG_DYN_LINK 1
 #include <boost/log/core.hpp>
