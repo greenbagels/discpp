@@ -30,15 +30,44 @@ namespace discpp
         // Example SyncReadStream:
         // boost::beast::ssl_stream<boost::beast::tcp_stream>;
         template <class SyncReadStream, class Context>
-        SyncReadStream create_https_stream(Context &ctx, std::string url, std::string port = "443");
+        SyncReadStream create_https_stream(Context &ctx,
+                                           const std::string url,
+                                           const std::string port = "443");
 
         // Example response:
         // boost::beast::http::response<beast::http::string_body>
         template <class Context>
-        auto http_get(Context &ctx, std::string url, std::string resource, std::string token);
+        auto get(Context &ctx,
+                 const std::string url,
+                 const std::string resource,
+                 const std::string token);
 
         template <class Context>
-        auto http_post(Context &ctx, std::string url, std::string resource, std::string token, std::string body);
+        auto post(Context &ctx,
+                  const std::string url,
+                  const std::string resource,
+                  const std::string token,
+                  const std::string body);
+
+        template <class Context>
+        auto put(Context &ctx,
+                 const std::string url,
+                 const std::string resource,
+                 const std::string token,
+                 const std::string body);
+
+        template <class Context>
+        auto patch(Context &ctx,
+                   const std::string url,
+                   const std::string resource,
+                   const std::string token,
+                   const std::string body);
+
+        template <class Context>
+        auto delete_(Context &ctx,
+                     const std::string url,
+                     const std::string resource,
+                     const std::string token);
 
         template <class Context>
         std::string get_gateway(Context &ctx);
