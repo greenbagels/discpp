@@ -15,7 +15,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # add_subdirectory(src build)
 add_library(discpp SHARED src/core/dis.cpp
                           src/core/gateway.cpp
-                          src/core/ws.cpp)
+                          src/core/ws.cpp
+                          src/net/http.cpp
+                          src/rest/channel.cpp)
 
 target_include_directories(discpp PUBLIC include)
 
@@ -30,7 +32,7 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
     target_compile_options(discpp PRIVATE -g0 -Os)
     target_link_options(discpp PRIVATE -s)
 else() # Assume debug
-    target_compile_options(discpp PRIVATE -g  -O0)
+    target_compile_options(discpp PRIVATE -g  -O0 -ftime-trace)
 endif()
 
 # External library settings

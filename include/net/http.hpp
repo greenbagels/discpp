@@ -71,6 +71,8 @@ namespace discpp
 
         template <class Context>
         std::string get_gateway(Context &ctx);
+
+        std::string url_encode(std::string substring);
     } // namespace http
 } // namespace discpp
 

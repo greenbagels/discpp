@@ -25,6 +25,8 @@
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
+#include <boost/json.hpp>
+
 namespace discpp
 {
     /*! \namespace discpp
@@ -37,233 +39,32 @@ namespace discpp
     template <typename T>
     bool operator==(T& a, T& b)
     {
-        return a.id == b.id;
+        return a["id"].as_string() == b["id"].as_string();
     }
 
+    // Let's add some semantic meaning to what kind of objects we're working with
+
     /*! Gateway payload object that represents a single Discord user */
-    struct user
-    {
-        std::string id;
-        std::string username;
-        std::string discriminator;
-        std::string avatar;
-        bool bot;
-        bool system;
-        bool mfa_enabled;
-        std::string locale;
-        bool verified;
-        std::string email;
-        int flags;
-        int premium_type;
-        int public_flags;
-    };
+    using user = boost::json::object;
 
     /*! Gateway payload object that represents a single role in a guild */
-    struct role
-    {
-        std::string id;
-        std::string name;
-        int color;
-        bool hoist;
-        int position;
-        int permissions;
-        bool managed;
-        bool mentionable;
-    };
+    using role = boost::json::object;
+    using emoji = boost::json::object;
+    using guild_member = boost::json::object;
+    using voice_state = boost::json::object;
+    using overwrite = boost::json::object;
+    using channel = boost::json::object;
+    using activity = boost::json::object;
+    using presence_update = boost::json::object;
+    using guild = boost::json::object;
+    using invite = boost::json::object;
+    using message = boost::json::object;
+    using reaction = boost::json::object;
+    using overwrite = boost::json::object;
+    using embed = boost::json::object;
+    using attachment = boost::json::object;
+    using channel_mention = boost::json::object;
 
-    struct emoji
-    {
-        std::string id;
-        std::string name;
-        std::vector<std::string> roles;
-        user creator;
-        bool require_colons;
-        bool managed;
-        bool animated;
-        bool available;
-    };
-
-    struct guild_member
-    {
-        // TODO: think of a better naming scheme
-        discpp::user user;
-        std::string nick;
-        std::vector<std::string> roles;
-        std::string joined_at;
-        std::string premium_since;
-        // TODO: Check if these are for server or self mute/deaf
-        bool deaf;
-        bool mute;
-    };
-
-    struct voice_state
-    {
-        std::string guild_id;
-        std::string channel_id;
-        std::string user_id;
-        guild_member member;
-        std::string session_id;
-        bool deaf;
-        bool mute;
-        bool self_deaf;
-        bool self_mute;
-        bool self_stream;
-        bool suppress;
-    };
-
-    struct overwrite
-    {
-        std::string id;
-        std::string type;
-        int allow;
-        int deny;
-    };
-
-    struct channel
-    {
-        std::string id;
-        int type;
-        std::string guild_id;
-        int position;
-        std::vector<overwrite> permission_overwrites;
-        std::string name;
-        std::string topic;
-        bool nsfw;
-        std::string last_message_id;
-        int bitrate;
-        int user_limit;
-        int rate_limit_per_user;
-        std::vector<user> recipients;
-        std::string icon;
-        std::string owner_id;
-        std::string application_id;
-        std::string parent_id;
-        std::string last_pin_timestamp;
-    };
-
-    class activity
-    {
-        struct timestamps
-        {
-            int start;
-            int end;
-        };
-
-        struct emoji
-        {
-            std::string name;
-            std::string id;
-            bool animated;
-        };
-
-        struct party
-        {
-            std::string id;
-            int size[2]; // current_size, max_size
-        };
-
-        struct assets
-        {
-            std::string large_image;
-            std::string large_text;
-            std::string small_image;
-            std::string small_text;
-        };
-
-        struct secrets
-        {
-            std::string join;
-            std::string spectate;
-            std::string match;
-        };
-
-        public:
-            std::string name;
-            int type;
-            std::string url;
-            int created_at;
-            activity::timestamps timestamps;
-            std::string application_id;
-            std::string details;
-            std::string state;
-            activity::emoji emoji;
-            activity::party party;
-            activity::assets assets;
-            activity::secrets secrets;
-            bool instance;
-            int flags;
-    };
-
-    class presence_update
-    {
-        private:
-            struct client_status
-            {
-                std::string desktop;
-                std::string mobile;
-                std::string web;
-            };
-
-        public:
-            discpp::user user;
-            std::vector<std::string> roles;
-            activity game;
-            std::string guild_id;
-            std::string status;
-            std::vector<activity> activities;
-            presence_update::client_status client_status;
-            std::string premium_since;
-            std::string nick;
-    };
-
-    struct guild
-    {
-        std::string id;
-        std::string name;
-        std::string icon;
-        std::string splash;
-        std::string discovery_splash;
-        bool owner;
-        std::string owner_id;
-        int permissions;
-        std::string region;
-        std::string afk_channel_id;
-        int afk_timeout;
-        std::string embed_channel_id;
-        int verification_level;
-        int default_message_notifications;
-        int explicit_content_filter;
-        std::vector<role> roles;
-        std::vector<emoji> emojis;
-        std::vector<std::string> features;
-        int mfa_level;
-        std::string application_id;
-        bool widget_enabled;
-        std::string widget_channel_id;
-        std::string system_channel_id;
-        int system_channel_flags;
-        std::string rules_channel_id;
-        // TODO: handle shared_from_this() as a proper 8601 timestamp
-        std::string joined_at;
-        bool large;
-        bool unavailable;
-        int member_count;
-        std::vector<voice_state> voice_states;
-        std::vector<guild_member> members;
-        std::vector<channel> channels;
-        std::vector<presence_update> presences;
-        int max_presences;
-        int max_members;
-        std::string vanity_url_code;
-        std::string description;
-        std::string banner;
-        int premium_tier;
-        int premium_subscription_count;
-        std::string preferred_locale;
-        std::string public_updates_channel_id;
-        int approximate_member_count;
-        int approximate_presence_count;
-    };
 
     class context
     {
